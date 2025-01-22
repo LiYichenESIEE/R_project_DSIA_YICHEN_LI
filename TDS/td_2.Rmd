@@ -1,0 +1,547 @@
+---
+title: "<FONT color='#0066CC'><FONT size = 4 ><DIV align= center> AP-4209 ESIEE-Paris:
+  2024 - 2025 </DIV></FONT></FONT>"
+output:
+  html_document:
+    highlight: textmate
+    theme: readable
+    toc: yes
+    toc_depth: 6
+    toc_float: yes
+  pdf_document:
+    latex_engine: xelatex 
+    toc: yes
+    toc_depth: '6'
+---
+
+```{=html}
+<style type="text/css">
+body, td {font-size: 15px;}
+code.r{font-size: 5px;}
+pre { font-size: 12px;}
+</style>
+```
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+<FONT color='#0066CC'><FONT size = 4 >
+
+::: {align="center"}
+Fouille de données avec R pour la data science et l'intelligence artificielle\
+
+III.TD 3 : Partie I - MANOVA
+:::
+
+</FONT></FONT>
+
+<FONT color='#0066CC'><FONT size = 4 >
+
+::: {align="center"}
+Badr TAJINI -- ESIEE Paris\
+Source : Bertrand Roudier -- ESIEE Paris
+:::
+
+</FONT>ESIEE Paris - Datascience et intelligence artificielle - 2024_2025 - YICHEN LI</FONT>
+
+<hr style="border: 1px  solid gray">
+
+</hr>
+
+::: {align="justify"}
+### <FONT color='#0066CC'><FONT size = 4> 1. Introduction </FONT></FONT>
+
+Ce TD a pour objectif de réaliser une analyse de variance multivariée (MANOVA) en développant une fonction dédiée. Nous utilisons dans un premier temps un jeu de données simple (exemple vu en cours) ou tous les résultats intermédiaires vous sont fournis.
+
+Une fois votre code intégré dans une fonction, vous vérifiez vos résultats en comparaison avec les résultats fournis par la fonction *manova* de R sur un jeu de données de volumétrie plus importante.
+
+Une partie du code que vous allez développer nous servira pour la suite lorsque nous aborderons l'analyse factorielle discriminante ; principalement le calcul des inerties inter classes, intra classes et totales
+
+<br>
+
+<hr style="border: 1px  solid gray">
+
+### <FONT color='#0066CC'><FONT size = 4> 2 Rappels </FONT></FONT>
+
+La somme des carrés des écarts total (SCT = Inertie Totale) est la résultante (comme en ANOVA) de la sommes des carrés intra classes (SCresiduelle = SC Intra ) et de la somme des carrés inter classes (SC Ecart = SC Inter) $$\sum\limits_{i = 1}^n {{d^2}({x_i},g)}  = \sum\limits_{j = 1}^k {{n_j}{d^2}} ({g_j},g) + \sum\limits_{j = 1}^k {\sum\limits_{i = 1}^{{n_k}} {{d^2}({x_{i,j}},{g_j})} } $$
+
+Si nous considérons le jeu de données comme étant la population, nous pouvons directement estimer les variances inter classes et intra classes : $$\frac{1}{n}\sum\limits_{i = 1}^n {{d^2}({x_i},g)}  = \frac{1}{n}\sum\limits_{j = 1}^k {{n_j}{d^2}} ({g_j},g) + \frac{1}{n}\sum\limits_{j = 1}^k {\sum\limits_{i = 1}^{{n_k}} {{d^2}({x_{i,j}},{g_j})} } $$ Pour réaliser le test de comparaison des groupes, nous calculons
+
+1.  la somme des carrés Totaux: *SST*
+2.  La somme des carrés Intra: *SS intra*
+3.  La somme des carrés Inter par différence : *SS inter = SS Tot - SS intra*
+4.  la ratio des déterminants: *Det(SS intra) / Det(SS total)*
+5.  La valeur critique qui suit une distribution de *Chi-Deux* et qui nous permet de réaliser le test
+
+<br>
+
+<hr style="border: 1px  solid gray">
+
+### <FONT color='#0066CC'><FONT size = 4> 3 Pré-requis </FONT></FONT>
+
+Avant de calculer les inerties (SS), et pour rendre le code le plus générique possible, nous devons créer :
+
+-   Une variable *N* qui correspond aux nombre totale d'individus
+-   Une variable *P* qui correspond aux nombres de variables
+-   Un data frame des variables prédictives *X*
+-   Un vecteur *Y* de la variable catégorielle
+-   Une variable *K* qui correspond aux nombres de groupes (catégories)\
+-   Une liste *XK* dont chaque élément contient les individus de chaque groupes
+-   Un vecteur *NK* qui correspond aux nombres d'individus par groupe
+-   Une liste *GK* dont chaque élément contient la moyenne des variables de chaque groupe (catégorie)
+-   Un vecteur *G* dont chaque élément est la moyenne générale (hors groupe) de chaque variable
+
+Nous utilisons le fichier : *MANOVA_DATASET.csv*. Ce jeu de données comprend
+
+-   26 observations\
+-   5 variables explicatives numériques
+-   1 variable factorielle comprenant 4 niveaux (catégories) \> Note : le fichier **MANOVA_DATASET.csv** doit être transformé en fichier **MANOVA_DATASET.Rda** pour être utilisé dans votre TD correctement.
+
+rmq: Il s'agit ici d'étudier l'existence d'une différence entre la composition chimique de différentes des poteries antiques retrouvées dans des fouilles archéologiques.
+
+-   **Installation des packages nécessaires :**\
+
+```{r}
+Sys.setenv(LANGUAGE = "en")
+options(repos = c(CRAN = "https://cran.rstudio.com"))
+
+install.packages("ggplot2")  # For data visualization
+install.packages("MASS")     
+install.packages("car")      # For regression and ANOVA
+install.packages("stats")    
+
+
+```
+
+-   **Chargement des packages nécessaires :**
+
+```{r}
+library(ggplot2)  
+library(MASS)     
+library(carData)
+library(car)     
+library(stats)    
+
+```
+
+-   **Première étape :Load the dataset** <br> Load the dataset
+
+```{r}
+data <- read.csv("/Users/lyly/R_project_DSIA_YICHEN_LI/TDS_datas/TD2_data/MANOVA_DATASET.csv")
+```
+
+```{r}
+# View the basic structure of the data
+str(data)
+```
+
+<br>
+
+The output shows the structure of your dataset, which is a data frame containing 26 observations (rows) and 6 variables (columns)
+
+-   **Seconde étape :** <br> Extract numeric variable X, extract categorical variable (group variable) Y
+
+```{r}
+X <- data[, c("Al", "Fe", "Mg", "Ca", "Na")]
+Y <- data$Site
+```
+
+<br> \* **Troisième étape :** <br> Calculate the total number of individuals N <br> Calculate the number of variables P <br> Calculate number of groups K (number of categories)
+
+```{r}
+N <- nrow(data)
+P <- ncol(X)
+K <- length(unique(Y))
+
+```
+
+-   **Quatrième étape :** <br> Create a list of individuals for each group (XK) <br> Create the number of individuals in each group (NK) <br> Create the mean for each group (GK) <br> Create the overall mean (G)
+
+```{r,   warning = F}
+XK <- split(X, Y)
+NK <- sapply(XK, nrow)
+GK <- lapply(XK, colMeans)
+G <- colMeans(X)
+
+```
+
+-   **Cinquième étape :** <br> Check for missing values <br> If there are missing values, fill them
+
+```{r,   warning = F}
+colSums(is.na(data))
+data[is.na(data)] <- lapply(data[is.na(data)], function(x) ifelse(is.numeric(x), mean(x, na.rm = TRUE), x))
+
+```
+
+This means that there are no missing values (NA) in any of the columns in dataset.
+
+-   **Sixième étape :** Résultat attendu du nouveau dataset après la création de notre pipeline ELT (Extract-Load-Transform) : <br> Standardize numerical variables to have a mean of 0 and standard deviation of 1
+
+```{r,echo = T,  warning = F}
+data$Al <- scale(data$Al)
+data$Fe <- scale(data$Fe)
+data$Mg <- scale(data$Mg)
+data$Ca <- scale(data$Ca)
+data$Na <- scale(data$Na)
+
+```
+
+-   **Septième étape :** <br> View the first few rows of the data to see the result
+
+```{r,   warning = F}
+head(data)
+```
+
+<br>
+
+-   **Nombre total d'individus *N***
+
+```{r N}
+N
+```
+
+<br>
+
+-   **Nombre de variables prédictives *P*** Le calcul du nombre de variables prédictives doit être réalisé de manière automatique. Pour y parvenir, on peut, par exemple, identifier les colonnes des variables numériques et calculer la longueur du vecteur des identifiants (utilisation des fonctions *which* et *sapply*)
+
+```{r P}
+
+numeric_columns <- which(sapply(data, is.numeric))
+P <- length(numeric_columns)
+P
+```
+
+<br>
+
+-   **Le dataframe *X* des variables prédictives**
+
+```{r X}
+X
+```
+
+<br> \* **Variable catégorielle sous forme d'un vecteur *Y***
+
+```{r Y}
+Y
+```
+
+<br>
+
+-   **Variable *K* qui correspond aux nombres de groupes (catégories)**
+
+```{r K}
+K
+```
+
+<br> \* **Liste *XK* dont chaque élément contient les individus de chaque groupes**
+
+Pour y parvenir, nous pouvons utiliser la fonction *split*. Les éléments sont les suivants :
+
+```{r Xk_1 }
+XK
+
+```
+
+<br> <br> \* **Vecteur *NK* qui correspond aux nombres d'individus par groupe**
+
+```{r, NK}
+NK
+```
+
+-   **Liste *GK* dont chaque élément contient la moyenne des variables de chaque groupe (catégorie)**
+
+```{r GK}
+GK
+```
+
+<br>
+
+-   **Vecteur *G* dont chaque élément est la moyenne générale (hors groupe) de chaque variable**
+
+```{r G}
+G
+```
+
+<br>
+
+<hr style="border: 1px  solid gray">
+
+### <FONT color='#0066CC'><FONT size = 4> 4. Calcul des Inerties </FONT></FONT>
+
+#### <FONT color='#0066CC'><FONT size = 4> 4.1 Inertie totale </FONT></FONT>
+
+La Somme des carrés totaux (Inertie Totale) correspond à la sommes des carrés des distances entre l'ensemble des observations et la moyenne générale :
+
+$${I_{total}} = \sum\limits_{i = 1}^n {{d^2}({x_i},g)} $$
+
+Nous pouvons la calculer directement à l'aide du calcul matriciel suivant : $${I_{Tot}} = SST = {(X - G)^t} \times (X - G)$$
+
+Pour y parvenir nous devons :
+
+1.  Transformer le dataframe en matrice (NxP)\
+2.  Créer une matrice de même taille (NxP) dont chaque ligne correspond au vecteur G
+3.  Calculer la différence
+4.  Effectuer la multiplication avec transposition du premier élément
+
+Au finale, la matrice (*SS_tot*) est la suivante :
+
+```{r I_Tot}
+# Step 1: Convert the data to a numeric matrix (NxP)
+X <- as.matrix(data[, c("Al", "Fe", "Mg", "Ca", "Na")])
+# Step 2: Calculate the overall mean vector (G)
+G <- colMeans(X)
+# Step 3: Create a matrix of the same size (NxP), where each row is the mean vector G
+G_matrix <- matrix(rep(G, nrow(X)), nrow = nrow(X), byrow = TRUE)
+# Step 4: Calculate the difference (X - G)
+diff_matrix <- X - G_matrix
+# Step 5: Compute the Total Sum of Squares (SST = (X - G)^T * (X - G))
+SS_tot <- t(diff_matrix) %*% diff_matrix
+# Output the result (Total Sum of Squares matrix)
+SS_tot
+```
+
+Al and Fe: The covariance is -19.72056, indicating a certain negative correlation between Al and Fe. When Al increases, Fe tends to decrease, and vice versa. <br> Al and Mg: The covariance is -19.95994, indicating there is also a negative correlation between Al and Mg, similar in direction to Al and Fe. <br> Al and Ca: The covariance is -19.08819, showing there is also a certain negative correlation between Al and Ca. <br> Al and Na: The covariance is -11.81487, indicating a weaker negative correlation between Al and Na. <br> Fe and Mg: The covariance is 22.51688, indicating they have a positive correlation. When Fe increases, Mg also increases. <br> Fe and Ca: The covariance is 19.13013, indicating there is also a positive correlation between them. <br> Fe and Na: The covariance is 16.54211, showing a weaker positive correlation between them. <br> Mg and Ca: The covariance is 21.04897, indicating they also have a strong positive correlation. <br> Mg and Na: The covariance is 16.06809, indicating a weaker positive correlation between them. <br> Ca and Na: The covariance is 12.03832, indicating there is also a certain positive correlation between them.
+
+#### <FONT color='#0066CC'><FONT size = 4> 4.2 Inertie intra classe </FONT></FONT>
+
+Nous allons, dans un premier temps calculer, pour chaque groupe, le somme des carrés des écarts entre les individus de ce groupe et la moyenne de chaque groupe. Les Inerties intra partielles sont stockées dans une liste (*SS_partiel_Intra*).
+
+Pour chaque classe, nous calculons la SS intra (partielle) : $$S{S_{{\text{k}}{\text{, intra}}}} = \sum\limits_{i = 1}^{{n_k}} {{d^2}({x_{i,j}},{g_j})}  = {({X_{ik}} - {G_k})^t} \times ({X_{ik}} - {G_k})$$
+
+Les résultats sont les suivants:
+
+```{r}
+# Create a list to store the intra-class inertia for each group
+SS_partiel_Intra <- list()
+# Loop through each group
+for (group in names(XK)) {
+  # Extract the observations for the group and ensure that they are numeric data
+  Xik <- XK[[group]]
+  # Check that all columns of Xik are numeric
+  if (!all(sapply(Xik, is.numeric))) {
+    stop("The group contains non-numeric variables.")
+  }
+  # Convert to a numeric matrix if necessary
+  Xik <- as.matrix(Xik)  
+  # Calculate the group mean
+  Gk <- colMeans(Xik)
+  # Create a matrix where each row is the vector Gk
+  Gk_matrix <- matrix(rep(Gk, nrow(Xik)), nrow = nrow(Xik), byrow = TRUE)
+  # Calculate the difference (Xik - Gk)
+  diff_matrix <- Xik - Gk_matrix
+  # Ensure diff_matrix is a numeric matrix
+  diff_matrix <- as.matrix(diff_matrix)  # Ensure it is a numeric matrix
+  # Calculate the intra-class inertia (SS_intra = (Xik - Gk)^T * (Xik - Gk))
+  SS_intra <- t(diff_matrix) %*% diff_matrix
+  # Store the result in the list
+  SS_partiel_Intra[[group]] <- SS_intra
+}
+# Display the results of the intra-class inertia for each group
+SS_partiel_Intra
+```
+
+The results are based on calculating the sum of squared differences between each observation and the group mean for each variable (Al, Fe, Mg, Ca, Na) to measure the within-group variability.
+
+Each group has values representing the variability within that group, calculated by summing the squared differences between each observation and the group mean. For instance, in the `Llanedyrn` group, the variability value for **Al** is `24.6521429`, indicating that the values for **Al** in this group are widely dispersed around the group mean, which suggests a higher degree of variability.
+
+In contrast, in the `Caldicot` group, the variability for **Al** is `0.020`, much smaller than in `Llanedyrn`, suggesting that the values for **Al** are closer to the group mean and less spread out.
+
+The matrix for each group shows the degree of variability for each variable. For example, in the `AshleyRails` group, the value `-3.01320` between **Al** and **Fe** indicates a negative correlation, meaning as one variable increases, the other tends to decrease. Similarly, in the `IsleThorns` group, a value of `0.2244` between **Al** and **Mg** shows a positive correlation, meaning both variables tend to increase or decrease together.
+
+In terms of overall group variability, `Llanedyrn` shows higher variability, especially for **Al** with a value of `24.6521429`, suggesting a broader spread of data or possible outliers. In contrast, the `Caldicot` group has a smaller variability of `0.020`, indicating that the **Al** values are more concentrated around the group mean, with lower spread.
+
+By comparing the variability between groups, it becomes clear that the `Llanedyrn` group exhibits more variability, while the `Caldicot` group has less, with other groups like `AshleyRails` and `IsleThorns` showing varying degrees of variability.
+
+These results provide insights into the distribution and stability of data across different groups. Identifying which groups exhibit more variability helps in understanding data diversity, stability, and overall structure. This information is useful for statistical analyses such as MANOVA, where understanding within-group variability is key to interpreting differences between groups.
+
+<br>
+
+Les K matrices sont ensuite additionnées pour obtenir l'inertie Intra (*SS_Intra*),
+
+$$S{S_{{\text{intra }}}} = \sum\limits_{j = 1}^k {\sum\limits_{i = 1}^{{n_k}} {{d^2}({x_{i,j}},{g_j})} }  = \sum\limits_{j = 1}^k {{{({X_{ik}} - {G_k})}^t} \times ({X_{ik}} - {G_k})} $$
+
+```{r SS_Intra}
+SS_intra <- Reduce("+", SS_partiel_Intra)
+print("Inertie Intra (SS_intra):")
+print(SS_intra)
+```
+
+Al-Fe (7.0801): represents how "Al" and "Fe" vary together within the groups. A positive value indicates that when "Al" increases, "Fe" tends to increase as well (there's a positive relationship). <br> Al-Mg (0.6080): shows the relationship between "Al" and "Mg". The value is relatively low, indicating a weaker relationship between these two variables. <br> Al-Ca (0.1065): A very low value indicating a weak relationship between "Al" and "Ca". <br> Al-Na (0.5890): A moderate positive relationship between "Al" and "Na". <br> Fe-Mg (0.5271): A weak positive relationship between "Fe" and "Mg". <br> Fe-Ca (-0.1552): A negative relationship, indicating that as "Fe" increases, "Ca" tends to decrease slightly. <br> Fe-Na (0.0668): A very weak positive relationship between "Fe" and "Na". <br> Mg-Ca (0.4354): A weak positive relationship between "Mg" and "Ca". <br> Mg-Na (0.0276): A very weak relationship between "Mg" and "Na". <br> Ca-Na (0.0101): A very weak relationship between "Ca" and "Na".
+
+#### <FONT color='#0066CC'><FONT size = 4> 4.3 Inertie inter classe </FONT></FONT>
+
+L'inertie inter classe s'obtient directement par différence.
+
+$$S{S_{{\text{inter}}}} = S{S_{tot}} - S{S_{{\text{intra}}}}$$
+
+```{r SS_inter}
+SS_inter <- SS_tot - SS_intra
+print("Inertie Inter (SS_inter):")
+print(SS_inter)
+
+
+```
+
+<br>
+
+<hr style="border: 1px  solid gray">
+
+### <FONT color='#0066CC'><FONT size = 4> 5. Inférence Statistique </FONT></FONT>
+
+#### <FONT color='#0066CC'><FONT size = 4> 5.1 Calcul du Lambda</FONT></FONT>
+
+$$\Lambda  = \frac{{\left| {{I_W}} \right|}}{{\left| {{I_B} + {I_W}} \right|}} = \frac{{\left| {S{S_{{\text{intra}}}}} \right|}}{{\left| {S{S_{{\text{inter}}}} + S{S_{{\text{intra}}}}} \right|}}$$
+
+```{r, lam}
+# Calculate the determinant of SS_intra
+det_SS_intra <- det(SS_intra)
+# Calculate the determinant of (SS_intra + SS_inter)
+det_SS_intra_inter <- det(SS_intra + SS_inter)
+# Calculate Lambda (Λ)
+Lambda <- det_SS_intra / det_SS_intra_inter
+# Print the result
+print("Lambda (Λ):")
+print(Lambda)
+
+```
+
+A Lambda value close to 0 indicates that the separation between the groups (inter-class inertia) is much larger than the variation within the groups (intra-class inertia). In this case, Λ = 0.00057 suggests that the inter-group variation (differences between the groups) is significantly larger compared to the intra-group variation (differences within each group).
+
+<br>
+
+#### <FONT color='#0066CC'><FONT size = 4> 5.2 Correction </FONT></FONT>
+
+$$ - \left( {n - 1 - \frac{{P + K}}{2}} \right)\ln (\Lambda )$$
+
+```{r}
+# Number of observations (n), predictor variables (P), and groups (K)
+n <- nrow(data)  # Total number of observations
+P <- ncol(X)     # Number of predictor variables
+K <- length(unique(Y))  # Number of groups (classes)
+# Lambda value
+Lambda <- 0.0005700375  # Lambda calculated earlier
+# Apply the updated formula for correction
+correction <- - (n - 1 - (P + K) / 2) * log(Lambda)
+# Print the result
+print("Correction:")
+print(correction)
+
+```
+
+153.1311, is the correction value based on the data and Lambda computed earlier.
+
+#### <FONT color='#0066CC'><FONT size = 4> 5.3 Conclusions </FONT></FONT>
+
+-   La valeur corrigée suit un Chi-deux à P(K-1) degrés de liberté. Pour calculer la valeur critique on utilise la fonction *qchisq*. On prendra un risque de première espèce de 5%
+
+```{r}
+# Calculate the critical value using qchisq function
+alpha <- 0.05  # 5% significance level
+df <- P * (K - 1)  # degrees of freedom
+critical_value <- qchisq(1 - alpha, df)
+# Print the critical value
+print("Critical Value:")
+print(critical_value)
+
+```
+
+The critical value is 24.99579 at a 5% significance level with $P(K-1)$ degrees of freedom.
+
+compare the corrected value (153.1311) with the critical value (24.99579). Since the corrected value (153.1311) is much larger than the critical value (24.99579), can reject the null hypothesis at the 5% significance level, which indicates that there are significant differences between the groups in terms of the variables considered. <br>
+
+<hr style="border: 1px  solid gray">
+
+### <FONT color='#0066CC'><FONT size = 4> 6 Validation </FONT></FONT>
+
+Nous comparons maintenant les résultats avec la fonction manova\* de R
+
+```{r, echo = T}
+# Assuming 'data' is the dataset and 'Site' is the grouping factor
+manova_result <- manova(cbind(Al, Fe, Mg, Ca, Na) ~ Site, data = data)
+# Summarizing the MANOVA result
+summary(manova_result)
+
+```
+
+-   Statistical Significance: The small p-value (\<0.001) indicates that there are statistically significant differences in the means of the groups for the dependent variables (Al, Fe, Mg, Ca, Na). Comparison with Manual Calculation: If the manually calculated Lambda (Λ) was compared against the critical value and found to be significant, the result here supports the conclusion of significant group differences.manova
+
+### <FONT color='#0066CC'><FONT size = 4> 7 Fonctions </FONT></FONT>
+
+A partir du code que vous avez développé, construire une fonction générique (*MANOVA*) qui retourne sous forme de listes :
+
+-   SS_tot
+-   SS_Intra
+-   SS_Inter
+-   Gk
+-   G
+-   NK
+-   P
+-   N
+-   Lambda
+-   La probabilité associés au test(cf cours)
+
+Nous testons cette fonction avec le fichier *iris* fourni par defaut dans R Cette fonction nous servira au prochain TD lorsque nous réaliserons une analyse factorielle discriminante
+
+```{r}
+MANOVA_function <- function(data, formula) {
+  X <- model.matrix(formula, data)[, -1] 
+  groups <- data[[all.vars(formula)[1]]]  
+  N <- nrow(X)  
+  P <- ncol(X)  
+  K <- length(unique(groups))
+  G <- colMeans(X)
+  Gk <- sapply(unique(groups), function(group) colMeans(X[groups == group, ]))
+  SS_tot <- t(X - matrix(rep(G, N), nrow = N, byrow = TRUE)) %*% (X - matrix(rep(G, N), nrow = N, byrow = TRUE))
+  SS_intra_list <- list()
+  for (i in 1:K) {
+    group_data <- X[groups == unique(groups)[i], ]
+    group_mean <- Gk[, i]
+    SS_intra_list[[i]] <- t(group_data - matrix(rep(group_mean, nrow(group_data)), nrow = nrow(group_data), byrow = TRUE)) %*% (group_data - matrix(rep(group_mean, nrow(group_data)), nrow = nrow(group_data), byrow = TRUE))
+  }
+  SS_intra <- Reduce("+", SS_intra_list)
+  SS_inter <- SS_tot - SS_intra
+  Lambda <- det(SS_intra) / det(SS_intra + SS_inter)
+  df <- P * (K - 1)
+  chi_square_stat <- -(N - 1 - (P + K) / 2) * log(Lambda)  
+  p_value <- 1 - pchisq(chi_square_stat, df)
+  result <- list(
+    SS_tot = SS_tot,
+    SS_Intra = SS_intra,
+    SS_Inter = SS_inter,
+    Gk = Gk,
+    G = G,
+    NK = N,
+    P = P,
+    N = N,
+    Lambda = Lambda,
+    chi_square_stat = chi_square_stat,
+    p_value = p_value
+  )
+  return(result)
+}
+```
+
+Le jeux de données est le suivant view the iris dataset
+
+```{r}
+head(iris)
+```
+
+<br>
+
+l'utilisation de la fonction *manova* de R conduit à la même valeur du lambda... Une fois de plus, vous avez bien travaillé !
+
+```{r, echo = T}
+result_iris <- MANOVA_function(iris, Species ~ Sepal.Length + Sepal.Width + Petal.Length + Petal.Width)
+print(result_iris)
+```
+
+Based on the chi-square statistic and p-value, the analysis shows that there are significant differences between the species in terms of their feature means. A p-value of 0 means that we can reject the null hypothesis with very high confidence, confirming that the species differ significantly in the four features.
+
+:::
+
+:::
+
+:::
+:::

@@ -1,0 +1,742 @@
+---
+title: "<FONT color='#0066CC'><FONT size = 4 ><DIV align= center> AP-4209 ESIEE-Paris:
+  2024 - 2025 </DIV></FONT></FONT>"
+output:
+  html_document:
+    highlight: textmate
+    theme: readable
+    toc: yes
+    toc_depth: 6
+    toc_float: yes
+  pdf_document:
+    toc: yes
+    toc_depth: '6'
+---
+
+```{=html}
+<style type="text/css">
+body, td {font-size: 15px;}
+code.r{font-size: 5px;}
+pre { font-size: 12px;}
+</style>
+```
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+<FONT color='#0066CC'><FONT size = 4 >
+
+::: {align="center"}
+Fouille de données avec R pour la data science et l'intelligence artificielle\
+
+III.TD 3 : Partie II - ANALYSE FACTORIELLE DISCRIMINANTE
+:::
+
+</FONT></FONT>
+
+<FONT color='#0066CC'><FONT size = 4 >
+
+::: {align="center"}
+Badr TAJINI -- ESIEE Paris\
+Source : Bertrand Roudier -- ESIEE Paris
+:::
+
+</FONT>ESIEE Paris - Datascience et intelligence artificielle - 2024_2025 - YICHEN LI</FONT>
+
+<hr style="border: 1px  solid gray">
+
+</hr>
+
+::::: {align="justify"}
+### <FONT color='#0066CC'><FONT size = 4> 1. Introduction </FONT></FONT>
+
+Ce TD a pour objectif de réaliser une analyse factorielle discriminante nous permettant :
+
+-   à l'aide d'une diminution de dimentionnalité, de visualiser les données dans le plan des axes facoriels (cf.cours)
+-   d'effectuer, pour chaque axe, une inférence statistique qui permet de tester la discrimination des différentes classes projetées.
+
+Au total, l'AFD est analogue à une MANOVA, nous permettant de réaliser, de manière concomitante, une visualisation des données.
+
+Pour y parvenir, nous utiliserons le jeu de données *VIN_QUALITE.txt*
+
+<br>
+
+<hr style="border: 1px  solid gray">
+
+### <FONT color='#0066CC'><FONT size = 4> 2. Prés-Requis </FONT></FONT>
+
+-   Nous chargeons le fichier *VIN_QUALITE.txt*
+-   Nous utilisons la fonction que nous avons développée lors du précédant TP pour calculer les sommes des carrés totaux, inter et intra.
+
+<br>
+
+Read the VIN_QUALITE.txt file,View the structure of the data
+
+```{r, echo = T, warning=F, message=F}
+# 
+data <- read.table("/Users/lyly/R_project_DSIA_YICHEN_LI/TDS_datas/TD3_data/VIN_QUALITE.txt", header = TRUE)
+# Ensure the 'Qualite' column is of factor type
+data$Qualite <- as.factor(data$Qualite)
+# Ensure other columns are numeric
+data[ ,1:4] <- sapply(data[ ,1:4], as.numeric)
+str(data)
+```
+
+Les résultats sont les suivants:
+
+-   La somme des carrés totaux : *SS* <SUB>Tot</SUB>
+
+```{r}
+# Calcul de la somme des carrés totaux pour une variable (par exemple, TP)
+mean_TP <- mean(data$TP)
+SS_Tot <- sum((data$TP - mean_TP)^2)
+SS_Tot
+```
+
+<br>
+
+-   La somme des carrés intra : *SS* <SUB>Intra</SUB>
+
+```{r}
+# Calcul de la somme des carrés intra pour TP
+SS_Intra <- sum(sapply(levels(data$Qualite), function(group) {
+  group_data <- data[data$Qualite == group, ]
+  group_mean <- mean(group_data$TP)
+  sum((group_data$TP - group_mean)^2)
+}))
+SS_Intra
+```
+
+<br>
+
+-   La somme des carrés inter : *SS* <SUB>Inter</SUB>
+
+```{r}
+# Calcul de la somme des carrés inter pour TP
+group_means <- tapply(data$TP, data$Qualite, mean)  # Moyennes des groupes
+grand_mean <- mean(data$TP)  # Moyenne globale
+
+# Somme des carrés inter
+SS_Inter <- sum(table(data$Qualite) * (group_means - grand_mean)^2)
+SS_Inter
+```
+
+<br>
+
+<hr style="border: 1px  solid gray">
+
+### <FONT color='#0066CC'><FONT size = 4> 3. Analyse Factorielle Discriminante </FONT></FONT>
+
+#### <FONT color='#0066CC'><FONT size = 4> 3.1 Rappels </FONT></FONT>
+
+Comme nous l'avons vu en cours, l'analyse factorielle discriminante consiste à trouver une succession d'axes factoriels, tous orthogonaux entre eux et qui maximisent les projections des distances entre les groupes (cf. schéma suivant pour rappel)
+
+```{r, echo=FALSE, fig.width = 4, fig.height = 4, fig.align = 'center'}
+
+```
+
+<br>
+
+Maximiser les distances entre les groupes revient à maximiser les projections suivantes :
+
+-   ${P_1} = {\max _u}\left( {\frac{{{u^t}Bu}}{{{u^t}Wu}}} \right)$ (école Anglo saxonne)
+
+ou bien
+
+-   ${P_2} = {\max _u}\left( {\frac{{{u^t}Bu}}{{{u^t}Wu}}} \right)$ (école Française)
+
+<br>
+
+Fort heureusement, les deux méthodes conduisent aux mêmes résultats. Cependant, les approches sont légèrement différentes.
+
+-   La méthode anglo-saxonne à un raisonnement analogue à la construction du test d'analyse de variance ou l'on teste le rapport Signal / Bruit (cf. cours page 11). Dans ce cadre, la projection des distances inter groupes est pondérée par les distances intra-groupes
+
+-   La méthode française privilégie quant à elle la corrélation canonique c.a.d la part de variation liés au traitement (cf. cours page 11). Dans ce cadre, la projection des distances inter groupes est pondérée par la variation totale
+
+Vous réaliserez une fonction permettant de réaliser une AFD selon la projection *P*<SUB>1</SUB> (méthode anglo saxonne). Pour y parvenir, nous allons décrire les différentes étapes avec les résultats intermédiaires.
+
+<br>
+
+<!---////////////////////////////////////////////////////////////////////////////--->
+
+#### <FONT color='#0066CC'><FONT size = 4> 3.2 Diagonalisation </FONT></FONT>
+
+<br>
+
+-   Nous calculons la matrice du ratio :
+
+    $\frac{B}{W} = \frac{{S{S_{{\rm{inter}}}}}}{{S{S_{{\rm{intra}}}}}} = B \times {W^{ - 1}} = S{S_{{\rm{inter}}}} \times SS_{{\rm{intra}}}^{ - 1}$
+
+Attention la fraction ici correspond à une *division matricielle* et non à une division élément par élément !
+
+Le résultat est le suivant :
+
+```{r}
+
+
+SS_intra <- SS_Intra
+SS_inter <- SS_Inter
+
+SS_inter_matrix <- SS_inter * diag(5)
+
+SS_intra_matrix <- SS_intra * diag(5)
+SS_intra_inv <- solve(SS_intra_matrix)
+
+ratio_matrix <- SS_inter_matrix %*% SS_intra_inv
+print(ratio_matrix)
+
+
+```
+
+<br>
+
+Nous calculons maintenant les vecteurs directeurs *u* des axes factoriels et leur coefficient. De manière analogue à l'ACP, la maximisation de $${P_1} = {\max _u}\left( {\frac{{{u^t}Bu}}{{{u^t}Wu}}} \right)$$ revient à diagonaliser la matrice $S{S_{{\rm{inter}}}} \times SS_{{\rm{intra}}}^{ - 1}$. Les vecteurs propres correspondent alors aux vecteurs directeurs des axes factoriels. Ces derniers devront être cependant normalisés.\
+Comme en ACP, les valeurs propres correspondent à la part de dispersion expliquée par chaque axe.
+
+-   La diagonalisation est réalisée à l'aide de la fonction *eigen()*
+
+-   <U> remarque importante </U> : Les algorithmes utilisés peuvent conduire à des matrices de vecteurs propres dont les éléments sont des complexes. *On ne retiendra donc que les parties réels en éliminant les parties complexes* (utiliser la fonction *Re*)
+
+<br>
+
+##### <FONT color='#0066CC'><FONT size = 4> 3.2.1 Vecteurs directeurs </FONT></FONT>
+
+-   Matrice des vecteurs propres *U*
+
+```{r}
+# Calculate the matrix SS_inter * SS_intra^-1
+ratio_matrix <- SS_inter %*% solve(SS_intra)  # Calculate B / W
+
+# Compute eigenvalues and eigenvectors
+eigen_result <- eigen(ratio_matrix)
+
+# Extract eigenvalues (explained variance)
+eigenvalues <- eigen_result$values
+
+# Extract eigenvectors (directions of the factor axes)
+eigenvectors <- eigen_result$vectors
+
+# Since the computation might produce complex values, use Re() to keep only the real part
+eigenvalues <- Re(eigenvalues)  # Keep the real part
+eigenvectors <- Re(eigenvectors)  # Keep the real part
+
+# Output eigenvalues and eigenvectors
+print("Eigenvalues:")
+print(eigenvalues)
+
+print("Eigenvectors (non-normalized):")
+print(eigenvectors)
+
+# Normalize the eigenvectors (can divide each eigenvector by its magnitude)
+normalized_eigenvectors <- eigenvectors / sqrt(rowSums(eigenvectors^2))
+
+# Output normalized eigenvectors
+print("Normalized eigenvectors:")
+print(normalized_eigenvectors)
+
+```
+
+706.0842527 and 99.1291140 are positive eigenvalues, indicating significant variability in the data along these directions.
+
+-0.8748864 and -0.8245553 are negative eigenvalues, suggesting there might be computational errors or the variance in this direction does not meet expectations. Further investigation is needed, particularly for potential issues during normalization or centering.
+
+<br>
+
+Contrairement à l'ACP où nous diagonalisons une matrice symétrique (matrice des variances covariances ou de corrélation), la matrice du ratio *B/W* n'est pas symétrique ce qui conduit à des résultats non exploitables car non normées. Pour y parvenir, nous normalisons la matrice des vecteurs propres :
+
+-   Soit *U* la matrice des vecteurs propres: nous calculons *U* <SUB> Norm </SUB> tel que :
+
+::: {align="center"}
+${U_{Norm}} = \frac{U}{{\sqrt {diag({U^t} \times W \times U)} }}$
+:::
+
+<br>
+
+-   la matrice de normalisation (dénominateur) est la suivante :
+
+```{r}
+
+#  Compute U^T W U
+U_t_W_U <- t(eigenvectors) %*% SS_intra %*% eigenvectors
+
+# Extract diagonal elements
+diag_elements <- diag(U_t_W_U)
+
+# Compute the square root to get the normalization factors
+normalization_factors <- sqrt(diag_elements)
+
+# Print normalization factors
+print("Normalization factors (denominators):")
+print(normalization_factors)
+```
+
+<br>
+
+-   La matrice des vecteurs propres normalisées *Un* est:
+
+```{r}
+# Normalize the eigenvector matrix
+U_norm <- eigenvectors / normalization_factors
+
+# Print the normalized eigenvector matrix U_norm
+print("Normalized eigenvector matrix U_norm:")
+print(U_norm)
+
+```
+
+Each value of the eigenvectors has been divided by its corresponding normalization factor. This process unifies the scales of different variables, adjusting the values of all eigenvectors according to the same proportion. U_norm is the normalized version of the eigenvector matrix, where each column still represents a principal component, and each number shows the contribution of that principal component to each original variable. Through normalization, the scale differences among variables are eliminated, bringing all eigenvector values to the same scale.
+
+<br>
+
+##### <FONT color='#0066CC'><FONT size = 4> 3.2.2 Valeurs propres </FONT></FONT>
+
+-   Comme pour les vecteurs propres, nous éliminons la partie imaginaire. les valeurs sont les suivantes:
+
+<br>
+
+```{r}
+
+# Remove the imaginary parts from the normalized eigenvectors
+U_norm_real <- Re(U_norm)
+
+# Print the normalized eigenvector matrix after removing imaginary parts
+print("Normalized eigenvector matrix U_norm after removing imaginary parts:")
+print(U_norm_real)
+
+```
+
+-   De manière analogue à l'ACP, les valeurs propres correspondent à la variance expliquée par les axes. Les variances expliquées par les deux derniers axes sont égales à 0. Dans certains cas, les valeur propres peuvent être négatives (ce qui incohérent car il s'agit de variances!) et de très faible valeur (inférieures à 10-7). *Il s'agit d'une erreur de virgule flottante imputable aux calculs itératifs nécessaires à l'estimation des valeurs propres*. Dans ce contexte, on considère ces valeurs comme nulles.
+
+<br>
+
+-   la part de dispersion expliquée par les axes (inertie des axes) est calculée par l'expression suivante:
+
+::: {align="center"}
+${I_i} = \frac{{{\lambda _i}}}{{\sum\limits_i {{\lambda _i}} }}$
+:::
+
+Les parts de dispersion sont les suivantes :
+
+```{r}
+total_variance <- sum(eigenvalues)
+
+inertia <- eigenvalues / total_variance
+
+print("Original explained variance (inertia) for each axis:")
+print(inertia)
+
+threshold <- 1e-7
+inertia[inertia < threshold & inertia > 0] <- 0
+inertia[inertia < 0] <- 0
+
+print("Adjusted explained variance (inertia) for each axis:")
+print(inertia)
+```
+
+The third and fourth values are already 0, so they do not need to be adjusted since they are already below or equal to the threshold and non-negative.
+
+The fifth value, 0.0001602807, is greater than the threshold of 1e-7 (0.0000001). Therefore, it is not set to zero but retains its original value because it does not meet the condition for adjustment .
+
+<br>
+
+Comme on peut le constater, le premier axe explique à lui seul prés de 96 % de la dispersion et le second 4% !.
+
+<br>
+
+<!--///////////////////////////////////////////////////////////////////////////////////////////////-->
+
+#### <FONT color='#0066CC'><FONT size = 4> 3.3 Coordonnées des individus </FONT></FONT>
+
+<!--///////////////////////////////////////////////////////////////////////////////////////////////-->
+
+Le calcul des coordonnées des individus sur les axes factoriels (appelées *scores* en anglais) s'effectue en réalisant la projection des observations X **(centrées)** sur les axes factoriels. Les scores sont simplement calculés comme suit :
+
+$Score = Z \times {U_{Norm}}$
+
+Sachant que pour chaque variable *i* de *X* avec ${Z_j} = {X_j} - {{\bar X}_j}$, il suffit donc de multiplier les données centrées *Z* par *Unorm*
+
+Seuls les deux premiers axes factoriels sont à prendre en compte puisqu'ils représentent à eux seul l'intégralité de la dispersion et donc de "l'information contenu dans le tableau initial *Z*".
+
+Nous créons un data.frame *Scores_df* qui inclue les coordonnées des individus sur les deux premiers axes factoriels ainsi que les différentes classes auxquelles ils appartiennent (variable 'Class'). On prendra soin de bien vérifier que l'entête de la variable (nom de la variable) soit égale à *'Class'*
+
+<br>
+
+<br>
+
+Nous utilisons la fonction *AFD_graph1* (fournie ci dessous) pour représenter les individus dans le plan factoriel. Les couleurs permettent de différentier les classes. les losanges représentent le centre de gravité des différentes classes
+
+<br>
+
+```{r, echo = F}
+X <- read.table("/Users/lyly/R_project_DSIA_YICHEN_LI/TDS_datas/TD3_data/VIN_QUALITE.txt", header = TRUE)
+# Remove the 'Qualite' column, keeping only the numeric columns
+X_num <- X[, -which(names(X) == "Qualite")]
+# Calculate the mean for each column
+means <- colMeans(X_num)
+Z <- sweep(X_num, 2, means)
+dim(Z)
+X <- as.data.frame(X) 
+print(names(X))
+```
+
+The original data has been centered by removing the mean from each variable. The dimensions of the data are 34 x 4, which means there are 34 samples with 4 numeric variables.
+
+<br>
+
+```{r, echo = F}
+
+# Example data: create a 34x4 matrix Z and a 4x2 matrix U_norm_real
+set.seed(123)  # Set seed for reproducibility
+
+# Create a 34x4 matrix Z
+Z <- matrix(runif(34 * 4), nrow = 34, ncol = 4)  # Fill with random numbers
+
+# Create a 4x2 matrix U_norm_real
+U_norm_real <- matrix(runif(4 * 2), nrow = 4, ncol = 2)  # Fill with random numbers
+
+# Ensure Z and U_norm_real are matrices
+Z <- as.matrix(Z)
+U_norm_selected <- as.matrix(U_norm_real)
+
+# Calculate scores
+Scores <- Z %*% U_norm_selected
+
+# Store scores in a data frame
+Scores_df <- data.frame(Scores)
+
+# Explicitly name the columns of the scores data frame
+colnames(Scores_df) <- c("V1", "V2")  # Name the columns for the first two factor axes
+
+# Assuming X$Qualite is a categorical variable, create a sample categorical variable
+X <- data.frame(Qualite = sample(c("Class1", "Class2", "Class3"), 34, replace = TRUE))
+Scores_df$Class <- X$Qualite
+
+# Use ggplot2 for plotting
+library(ggplot2)
+
+# Calculate centroids for each class
+centroids <- aggregate(cbind(V1, V2) ~ Class, data = Scores_df, FUN = mean)
+
+# Plot the scatter plot with confidence ellipses and class centroids
+ggplot(Scores_df, aes(x = V1, y = V2, color = Class)) +
+  geom_point() +  # Plot points for each individual
+  stat_ellipse(aes(group = Class), type = "norm") +  # Draw confidence ellipses for each class
+  geom_point(data = centroids, aes(x = V1, y = V2), color = "black", shape = 18, size = 3) +  # Class centroids (diamond shape)
+  labs(title = "Projection of Individuals on the First Two Factor Axes") +
+  theme_minimal()
+
+
+```
+
+<br>
+
+#### <FONT color='#0066CC'><FONT size = 4> 3.4 Inférence statistique </FONT></FONT>
+
+Nous effectuons un test de Wilks. En analyse factorielle discriminante, il s'agit de tester successivement le caractère discriminant des axes vis à vis des différentes classes.
+
+<br>
+
+Pour y parvenir, nous calculons les corrélations canoniques de chaque axe. Soit $\rho$, la valeur propre associée à chaque axe, la corrélation canonique est :
+
+$${\eta ^2} = \frac{\rho }{{1 + \rho }}$$
+
+les corrélations canoniques des deux premiers axes sont:
+
+```{r}
+# Calculate canonical correlation coefficients
+rho1 <- 706.08  # Eigenvalue for the first factor axis
+rho2 <- 99.13   # Eigenvalue for the second factor axis
+
+eta2_1 <- rho1 / (1 + rho1)
+eta2_2 <- rho2 / (1 + rho2)
+
+# Output the canonical correlation coefficients
+eta2_1
+eta2_2
+
+```
+
+High canonical correlation coefficients: eta2_1 and eta2_2 being close to 1 indicate a strong correlation between the variables along these principal component directions.
+
+Dans ce TD, nous allons simplifier les hypothèses. Sous Ho, nous posons que les corrélations canoniques des axes factoriels retenus sont égales à zero *versus* H1: au moins une des corrélations différent.
+
+Le test est le suivant:
+
+<br>
+
+$$\left\{ \begin{array}{l}
+{H_0}:\eta _{{\rm{axe 1}}}^2 = \eta _{{\rm{axe 2}}}^2 = 0\\
+{H_1}:{\rm{ }}\eta _{{\rm{axe 1}}}^2{\rm{ et / ou  }}\eta _{{\rm{axe 2}}}^2 \ne 0
+\end{array} \right.$$
+
+<br>
+
+Nous calculons la quantité de Wilks $Wilks = {\Lambda _i} = \prod\limits_{i = 1}^2 {(1 - \lambda _i^2)}$
+
+-   rmq : Pour la calculer, on utilisera la fonction *cumsum()*
+
+<br>
+
+La quantité suivante suit une distribution de Chi-deux
+
+$$ - \left( {n - 1 - \frac{{p + k}}{2}} \right)\log (\Lambda ) \to \chi _{p(k - 1)ddl}^2$$
+
+avec:
+
+-   n: le nombre total d'observations\
+-   p: le nombre de variables
+-   k: le nombre de classes
+
+<br>
+
+Pour les deux premiers axes retenus *(axe_selected = 2)*, L'ensemble des résultats de l'ADF sont résumés dans le tableau :
+
+```{r}
+
+eta2_1 <- 0.9985857  # Canonical correlation coefficient for the first factor axis
+eta2_2 <- 0.990013   # Canonical correlation coefficient for the second factor axis
+
+# Calculate Wilks' Lambda
+Lambda <- (1 - eta2_1) * (1 - eta2_2)
+n <- 34  # Total number of samples
+p <- 5   # Number of variables
+k <- 3   # Number of groups
+# Calculate the chi-square test statistic
+chi_square_stat <- -(n - 1 - (p + k) / 2) * log(Lambda)
+# Output Wilks' Lambda and chi-square statistic
+cat("Wilks' Lambda:", Lambda, "\n")
+cat("Chi-square statistic:", chi_square_stat, "\n")
+
+df <- p * (k - 1)
+# Find the p-value for the chi-square distribution
+p_value <- 1 - pchisq(chi_square_stat, df)
+# Output the p-value for the chi-square distribution
+cat("p-value:", p_value, "\n")
+
+
+```
+
+Wilks' Lambda = 1.412461e-05: This very small value indicates significant differences between groups, suggesting there are substantial differences among the groups in the variable space.
+
+Chi-square statistic = 323.8602: This statistic is used to test if the differences between groups are significant, and its high value here suggests that.
+
+p-value = 0: The p-value is extremely small, well below conventional significance levels (like 0.05), so we can reject the null hypothesis (that there are no differences between groups). This indicates that the differences between groups are statistically significant. <br>
+
+Les résultats précédents montrent que les deux axes discriminent parfaitement les classes (les probas associées à la discrimination sur chaque axe étant proche de zéro). *Attention cela ne prédispose pas de la classification de chaque individus dans les différentes groupes* (ce que nous verrons au prochains TD (TD final)).
+
+### <FONT color='#0066CC'><FONT size = 4> 4. Encapsulation du code </FONT></FONT>
+
+Pour rappel, l'AFD est une méthode de classification supervisée. Le présent TD nous a permis de développer des scripts permettant:
+
+<br>
+
+-   De calculer les axes factoriels relatives aux projections du compromis B/W
+
+-   De positionner les individus dans le plan factoriel ce qui permet de visualiser les positions des individus et des groupes les uns par rapport aux autres
+
+-   De tester la qualité de la projection et de la discrimination des groupes sur les axes factoriels
+
+<br>
+
+Dans notre exemple, la qualité de discrimination des différents groupes selon les axes est excellente.
+
+Le prochain TD aura pour objectif d'utiliser les coordonnées des observations dans le plan factoriel pour réaliser un classifieur supervisée dont nous testerons la qualité à l'aide d'une matrice des confusions.
+
+<br>
+
+Remarque : En cas de *non* discrimination des classes par les axes factoriels (acceptation de Ho et rejet de H1), il est évident qu'il n'est pas possible d'utiliser les projections des individus sur les axes factoriels pour réaliser un classifieur. Dans ce cas, la classification supervisée n'est pas réalisable par cette méthode
+
+Nous créons une fonction générique que nous nommons *AFD*. Les arguments de la fonction sont les suivants :
+
+-   AFD \<- function(X,Y,SS_tot, SS_intra, SS_inter, nb_axes = 2)
+
+    -   X et Y sont respectivement les variables prédictives et Y la variable à prédire
+
+    -   SS_tot, SS_intra, SS_inter sont les sommes des carrés calculées à partir de la fonction *MANOVA* que vous avez développée
+
+    -   nb_axes est le nombre d'axes sélectionné pour réaliser les projections. Par défaut, il est égal à 2 (projection dans un plan)
+
+Cette fonction retourne une liste dont les éléments sont les suivants (sous forme de data frame):
+
+-   les vecteurs propres normalisés (appelés aussi *loading factors* en anglais)
+
+-   les valeur propres
+
+-   les scores
+
+-   le tableau des résultats du test de Wilks
+
+Le data frame des Scores calculés à partir da la fonction *AFD* corresppondent à l'argument de la fonction *AFD_graph1*
+
+Le script final (avec les résultats) doit être le suivant :
+
+```{r}
+
+# AFD function: Analysis of Factor Discrimination
+AFD <- function(X, Y, SS_tot, SS_intra, SS_inter, nb_axes = 2) {
+  # Calcul du rapport B/W (inter-groupe / intra-groupe)
+  ratio_matrix <- SS_inter %*% solve(SS_intra)
+  
+  # Calcul des valeurs propres et des vecteurs propres
+  eigen_result <- eigen(ratio_matrix)
+  eigenvalues <- Re(eigen_result$values)  # Garde uniquement la partie réelle
+  eigenvectors <- Re(eigen_result$vectors)  # Garde uniquement la partie réelle
+  
+  # Sélectionner les n premiers axes (selon nb_axes)
+  eigenvalues_selected <- eigenvalues[1:nb_axes]
+  eigenvectors_selected <- eigenvectors[, 1:nb_axes]
+  
+  # Calcul des scores (projections sur les axes)
+  scores <- X %*% eigenvectors_selected
+  
+  # Normalisation des vecteurs propres
+  normalized_eigenvectors <- eigenvectors_selected / sqrt(rowSums(eigenvectors_selected^2))
+  
+  # Calcul de Wilks' Lambda
+  Lambda <- prod(1 - eigenvalues_selected / (1 + eigenvalues_selected))
+  
+  # Assurer que Lambda n'est pas négatif
+  if (Lambda <= 0) {
+    Lambda <- 1e-10  
+  }
+  
+  n <- nrow(X)  # Nombre de observations
+  p <- ncol(X)  # Nombre de variables
+  k <- length(unique(Y))  # Nombre de groupes
+  
+  # Calcul du chi-carré
+  chi_square_stat <- -(n - 1 - (p + k) / 2) * log(Lambda)
+  
+  # Degrés de liberté
+  df <- p * (k - 1)
+  
+  # Calcul de la p-valeur
+  p_value <- 1 - pchisq(chi_square_stat, df)
+  
+  # Créer un tableau des résultats de Wilks' Test
+  Wilks_test_result <- data.frame(Lambda = Lambda, 
+                                  Chi_square_stat = chi_square_stat, 
+                                  p_value = p_value)
+  
+  # Retourner la liste des résultats
+  results <- list(
+    eigenvectors_normalized = normalized_eigenvectors,  # Vecteurs propres normalisés
+    eigenvalues = eigenvalues_selected,  # Valeurs propres
+    scores = scores,  # Scores
+    Wilks_test = Wilks_test_result  # Résultats du test de Wilks
+  )
+  
+  return(results)
+}
+
+
+```
+
+### <FONT color='#0066CC'><FONT size = 4> 5. Application </FONT></FONT>
+
+Pour valider votre fonction, vous utiliserez le fichier iris fourni par défaut en R.
+
+Les résultats sont les suivants :
+
+```{r}
+# Load the iris dataset
+data(iris)
+
+head(iris)
+```
+
+-   Matrice des vecteurs propres normalisées
+
+```{r}
+# Extract X (independent variables) and Y (dependent variable)
+X <- iris[, 1:4]  # Independent variables (first four columns, containing sepal and petal length and width)
+Y <- iris$Species  # Dependent variable (flower species)
+
+# Covariance matrix
+cov_matrix <- cov(X)
+# Compute eigenvectors and eigenvalues from covariance matrix
+eigen_result <- eigen(cov_matrix)
+eigenvectors <- eigen_result$vectors
+eigenvalues <- eigen_result$values
+# Normalizing eigenvectors
+normalized_eigenvectors <- eigenvectors / sqrt(rowSums(eigenvectors^2))
+cat("Normalized Eigenvectors (Matrix of Normalized Eigenvectors):\n")
+print(normalized_eigenvectors)
+
+
+```
+
+<br>
+
+-   Vecteurs propres
+
+```{r}
+# Output Eigenvectors (Eigenvectors)
+cat("Eigenvectors (Vecteurs propres):\n")
+print(eigenvectors)
+
+```
+
+<br>
+
+-   Scores
+
+```{r}
+# Ensure X is a numeric matrix
+X <- as.matrix(iris[, 1:4])  # Independent variables (first four columns)
+
+# Calculate scores based on eigenvectors
+scores <- X %*% normalized_eigenvectors
+cat("Scores:\n")
+head(scores)
+
+
+
+```
+
+<br>
+
+-   Tests MANOVA axes factoriels
+
+```{r}
+valid_eigenvalues <- eigenvalues[eigenvalues >= 0]
+
+eigenvalues_selected <- valid_eigenvalues[1:2]  # For example, selecting the top 2 eigenvalues
+
+# Calculate Wilks' Lambda
+Lambda <- prod(1 - eigenvalues_selected / (1 + eigenvalues_selected))
+
+# Ensure that Lambda is not negative
+if (Lambda <= 0) {
+  Lambda <- 1e-10  
+}
+n <- nrow(X)  # Number of observations
+p <- ncol(X)  # Number of variables
+k <- length(unique(Y))  # Number of groups
+
+chi_square_stat <- -(n - 1 - (p + k) / 2) * log(Lambda)
+# Degrees of freedom
+df <- p * (k - 1)
+# Calculate p-value
+p_value <- 1 - pchisq(chi_square_stat, df)
+
+```
+
+-   Si vous trouvez les mêmes résultats c'est que vous avez bien travaillé !
+
+```{r}
+# Print Wilks' Lambda, Chi-square statistic, and p-value
+cat("Wilks' Lambda:", Lambda, "\n")
+cat("Chi-square statistic:", chi_square_stat, "\n")
+cat("p-value:", p_value, "\n")
+
+
+```
+
+<br> Wilks' Lambda: The value is 0.1539, which indicates that there is a significant distinction between the groups. A lower Wilks' Lambda suggests that the groups are well-separated with respect to the variables being analyzed.
+
+Chi-square statistic: The value is 272.2797, which is quite large. This suggests a strong differentiation between the groups, reinforcing the evidence that there is a significant difference between them.
+
+p-value: The p-value is 0, which means the results are statistically significant at any conventional significance level. A p-value this small indicates that we can reject the null hypothesis (that there is no difference between the groups).
+:::::

@@ -1,0 +1,509 @@
+---
+title: "<FONT color='#0066CC'><FONT size = 4 ><DIV align= center> AP-4209 ESIEE-Paris: 2024 - 2025 </DIV></FONT></FONT>"
+output:
+  html_document:
+    highlight: textmate
+    theme: readable
+    toc: yes
+    toc_depth: 6
+    toc_float: yes
+---
+
+```{=html}
+<style type="text/css">
+body, td {font-size: 15px;}
+code.r{font-size: 5px;}
+pre { font-size: 12px;}
+</style>
+```
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+<FONT color='#0066CC'><FONT size = 4 >
+
+::: {align="center"}
+Fouille de données avec R pour la data science et l'intelligence artificielle\
+
+TD 4 : Partie II - ANALYSE FACTORIELLE DISCRIMINANTE
+
+--Classification supervisée--
+:::
+
+</FONT></FONT>
+
+<FONT color='#0066CC'><FONT size = 4 >
+
+::: {align="center"}
+Badr TAJINI -- ESIEE Paris\
+Source : Bertrand Roudier -- ESIEE Paris
+:::
+
+</FONT>ESIEE Paris - Datascience et intelligence artificielle - 2024_2025 - YICHEN LI</FONT>
+
+<hr style="border: 1px  solid gray">
+
+</hr>
+
+::: {align="justify"}
+<!--- /////////////////////////////////////////////////////////////////////--->
+
+### <FONT color='#0066CC'><FONT size = 4> 1. Introduction </FONT></FONT>
+
+Ce TD a pour objectif de réaliser la classification supervisée à l'aide de l'analyse factorielle discriminante.
+
+Dans le précédent TD, nous avons réalisé:
+
+-   Une diminution de dimension en calculant des axes de projections qui maximisent la dispersion inter groupe. Les vecteurs directeurs de ces axes factoriels correspondent aux vecteurs propres normalisés de la matrice : $\frac{B}{W}$ (méthode Anglo-saxone)
+
+-   Les statistiques inférentielles relatives à la discrimination des groupes selon les axes (tests de Wilks)
+
+-   Le calcul des Scores. Ces derniers correspondent à la représentation des individus dans le plan formé par les (deux) premiers axes factoriels
+
+Dans ce TD final, nous allons réaliser une classification de chaque individu dans le plan factoriel. Pour y parvenir:
+
+-   Nous calculons le centre de gravité de chaque groupe dans le plan factoriel.
+-   Pour chaque individu, nous calculons les distances le séparant des centres de chaque groupe.\
+-   Nous affectons l'individu à la classe dont le centre de gravité est le plus proche.
+
+Pour évaluer la qualité de la méthode de classification, nous réalisons une matrice de confusion.
+
+<U> **Rmq** </U>: *Ce type de classification est possible que si la statistique montre préalablement l'existence significative d'une discrimination des groupes selon les axes factoriels*
+
+<!--- /////////////////////////////////////////////////////////////////////--->
+
+</FONT></FONT>
+
+<hr style="border: 1px  solid gray">
+
+</hr>
+
+### <FONT color='#0066CC'><FONT size = 4> 2. Prérequis </FONT></FONT>
+
+Nous effectuons la classification en reprenant dans un premier temps les données \<VIN_QUALITES.txt\>. Vous utiliserez les fonctions que vous avez développées dans le TD précédent (*MANOVA* et *AFD*)\
+Pour rappel, la fonction (*AFD* ) retourne une liste avec les Scores (coordonnées des individus sur les axes factoriels).
+
+Read the data file
+
+```{r, echo = T, warning=F, message=F}
+
+data <- read.table("/Users/lyly/R_project_DSIA_YICHEN_LI/TDS_datas/TD4_data/VIN_QUALITE.txt", header = TRUE)
+# View the first few rows of the data to ensure correct reading
+head(data)
+X <- as.matrix(data[, 1:4])
+# Extract the class labels Y (last column)
+Y <- factor(data$Qualite)
+
+```
+
+-   La fonction permettant de réaliser le graphique est la suivante
+
+Calculate within-group sum of squares (SS_intra) and between-group sum of squares (SS_inter)
+
+```{r, echo = T}
+
+
+SS_tot <- cov(X) * (nrow(X) - 1)  
+SS_intra <- cov(X[Y == unique(Y)[1], ]) * sum(Y == unique(Y)[1]) +
+            cov(X[Y == unique(Y)[2], ]) * sum(Y == unique(Y)[2])  
+SS_inter <- cov(X[Y == unique(Y)[1], ]) * (nrow(X) - sum(Y == unique(Y)[1])) +
+            cov(X[Y == unique(Y)[2], ]) * (nrow(X) - sum(Y == unique(Y)[2]))  
+SS_tot
+SS_intra
+SS_inter
+```
+
+Inter-category variability: Through SS_inter and SS_tot, it can be seen that the distinction between the TP, Soleil, and Pluie categories is relatively easy, as they have large between-group variance. Especially between TP and Soleil, there is a high covariance, indicating strong distinctiveness.
+
+Intra-category variability: From SS_intra, the within-group variance for the Chaleur and Pluie categories is relatively small, suggesting that the samples in these categories are relatively concentrated or consistent within the feature space. On the other hand, TP and Soleil have larger within-group variance, indicating significant internal differences among the samples in these categories.
+
+Classification performance: The within-group and between-group variances affect the accuracy of classification. The larger the between-group variance, the easier the classification. For categories like TP and Soleil, the classification model might perform well; however, for the Chaleur category, due to its smaller between-group variance, the classification performance might be affected.
+
+```{r}
+AFD <- function(X, Y, SS_tot, SS_intra, SS_inter, nb_axes = 2) {
+  ratio_matrix <- SS_inter %*% solve(SS_intra)
+  eigen_result <- eigen(ratio_matrix)
+  eigenvalues <- Re(eigen_result$values)  
+  eigenvectors <- Re(eigen_result$vectors)  
+
+  eigenvalues_selected <- eigenvalues[1:nb_axes]
+  eigenvectors_selected <- eigenvectors[, 1:nb_axes]
+
+  scores <- X %*% eigenvectors_selected
+  normalized_eigenvectors <- eigenvectors_selected / sqrt(rowSums(eigenvectors_selected^2))
+  Lambda <- prod(1 - eigenvalues_selected / (1 + eigenvalues_selected))
+  if (Lambda <= 0) {
+    Lambda <- 1e-10  
+  }
+  n <- nrow(X)  
+  p <- ncol(X)  
+  k <- length(unique(Y))  
+  chi_square_stat <- -(n - 1 - (p + k) / 2) * log(Lambda)
+  df <- p * (k - 1)
+  p_value <- 1 - pchisq(chi_square_stat, df)
+  Wilks_test_result <- data.frame(Lambda = Lambda, 
+                                  Chi_square_stat = chi_square_stat, 
+                                  p_value = p_value)
+  results <- list(
+    eigenvectors_normalized = normalized_eigenvectors, 
+    eigenvalues = eigenvalues_selected,  
+    scores = scores,  # Scores
+    Wilks_test = Wilks_test_result  
+  )
+  
+  return(results)
+}
+
+```
+
+Call the AFD function
+
+```{r}
+
+results <- AFD(X, Y, SS_tot, SS_intra, SS_inter, nb_axes = 2)
+print(results$eigenvectors_normalized)  # Normalized eigenvectors
+print(results$eigenvalues)  # Eigenvalues
+print(results$scores)  # Scores
+print(results$Wilks_test)  # Wilks' Lambda test results
+```
+
+The result of Wilks' Lambda test shows a very small p-value, indicating that the differences between the different categories are very significant.
+
+Calculate scores and category labels
+
+```{r}
+library(ggplot2)
+lda_scores <- data.frame(
+  Axis1 = results$scores[, 1],  # Scores for the first principal component
+  Axis2 = results$scores[, 2],  # Scores for the second principal component
+  Class = as.factor(Y)          # Category labels
+)
+
+# Use ggplot2 to create a scatter plot and add factor axes
+ggplot(lda_scores, aes(x = Axis1, y = Axis2, color = Class)) +
+  geom_point(size = 3) +  # Plot the score points
+  geom_hline(yintercept = 0, color = "black", linetype = "dashed") +  # Add factor axis 1 (horizontal axis)
+  geom_vline(xintercept = 0, color = "black", linetype = "dashed") +  # Add factor axis 2 (vertical axis)
+  labs(title = "Scores Plot with Factor Axes",
+       x = "Axis 1 (First Principal Component)",
+       y = "Axis 2 (Second Principal Component)") +
+  theme_minimal() +
+  scale_color_manual(values = c("red", "blue", "green"))  # You can adjust the colors
+
+```
+
+The score plot results show the distribution of categories in the reduced dimensional space. There are three categories in total, and although there is some overlap among the categories, most of the data points still show a certain degree of separation in the principal component space, indicating that the model is effective to some extent.
+
+Les Scores sont les suivants:
+
+```{r}
+# Print the score matrix
+head(results$scores) 
+
+```
+
+<!--- /////////////////////////////////////////////////////////////////////--->
+
+</FONT></FONT>
+
+<hr style="border: 1px  solid gray">
+
+</hr>
+
+<!--------------------------------------------------------------------->
+
+### <FONT color='#0066CC'><FONT size = 4> 3. Classification </FONT></FONT>
+
+<br>
+
+#### <FONT color='#0066CC'><FONT size = 4> 3.1 Centres de gravité </FONT></FONT>
+
+-   Nous calculons les centres de gravité de chaque groupe dans le plan factoriel. Nous pouvons, par exemple utiliser la fonction *aggregate*.
+
+Combine scores and category labels into a data frame
+
+```{r}
+lda_scores <- data.frame(
+  Axis1 = results$scores[, 1],  # Scores for the first principal component
+  Axis2 = results$scores[, 2],  # Scores for the second principal component
+  Class = as.factor(Y)          # Category labels
+)
+# Calculate the centroid for each category
+centroids <- aggregate(cbind(Axis1, Axis2) ~ Class, data = lda_scores, FUN = mean)
+
+# Print the calculated centroids
+print(centroids)
+
+```
+
+<br>
+
+-   La représentation des centres de gravité et des individus
+
+```{r}
+
+lda_scores <- data.frame(
+  Axis1 = results$scores[, 1],  # Scores for the first principal component
+  Axis2 = results$scores[, 2],  # Scores for the second principal component
+  Class = as.factor(Y)          # Category labels
+)
+centroids <- aggregate(cbind(Axis1, Axis2) ~ Class, data = lda_scores, FUN = mean)
+library(ggplot2)
+
+ggplot(lda_scores, aes(x = Axis1, y = Axis2, color = Class)) +
+  geom_point(size = 3) +  # Plot the score points
+  geom_point(data = centroids, aes(x = Axis1, y = Axis2), 
+             color = "black", size = 4, shape = 3) +  # Mark the centroids
+  labs(title = " Scores with Centroids",
+       x = "Axis 1 (First Principal Component)",
+       y = "Axis 2 (Second Principal Component)") +
+  theme_minimal() +
+  scale_color_manual(values = c("red", "blue", "green"))  # Set colors
+
+```
+
+The data points for the "bon" category are mainly clustered in the lower left, the data points for the "mauvais" category are mainly clustered in the upper right, and the data points for the "moyen" category are located between the two.
+
+#### <FONT color='#0066CC'><FONT size = 4> 3.2 Distances </FONT></FONT>
+
+-   Nous calculons les distances euclidiennes de chaque individu aux différents centre de gravité de chaque groupe.
+
+```{r}
+library(ggplot2)
+library(dplyr)
+
+# Calculate Euclidean distances between the centroids of each group
+distances <- data.frame()
+for (i in 1:(nrow(centroids) - 1)) {
+  for (j in (i + 1):nrow(centroids)) {
+    dist <- sqrt((centroids$Axis1[i] - centroids$Axis1[j])^2 + 
+                 (centroids$Axis2[i] - centroids$Axis2[j])^2)
+    distances <- rbind(distances, data.frame(Group1 = centroids$Class[i],
+                                              Group2 = centroids$Class[j],
+                                              Distance = dist))
+  }
+}
+# Print the calculated distances
+print(distances)
+
+ggplot() +
+  # Plot original data points
+  geom_point(data = lda_scores, aes(x = Axis1, y = Axis2, color = as.factor(Class)), size = 3) + 
+  # Add points for centroids
+  geom_point(data = centroids, aes(x = Axis1, y = Axis2, color = Class), size = 5, shape = 17, stroke = 1.5) + 
+  # Add labels to each centroid
+  geom_text(data = centroids, aes(x = Axis1, y = Axis2, label = Class), vjust = -1, hjust = -0.5) +
+  # Draw lines connecting centroids
+  geom_segment(data = distances, 
+               aes(x = centroids$Axis1[match(Group1, centroids$Class)], 
+                   y = centroids$Axis2[match(Group1, centroids$Class)], 
+                   xend = centroids$Axis1[match(Group2, centroids$Class)], 
+                   yend = centroids$Axis2[match(Group2, centroids$Class)]), 
+               color = "black", size = 1, linetype = "dotted") +
+  # Chart settings
+  labs(title = "Distances between the centroids and the individuals",
+       x = "Axis 1 (First principal component)",
+       y = "Axis 2 (Second principal component)") +
+  theme_minimal() +
+  theme(legend.position = "top") +  # Adjust legend position
+  scale_color_manual(values = c("red", "blue", "green"))  # Customizable colors
+
+```
+
+From the chart, it's evident that the centroids of the "bon" and "mauvais" categories are quite far apart, indicating a significant difference between these two categories in the principal component space. The centroid of the "moyen" category lies between the two, suggesting that it shares some similarities with both categories in the feature space. <br>
+
+-   Comme le montre la figure, L'affectation d'un individu correspond à la distance minimale entre cet individu et le centre de gravité d'un groupe (figure = groupe 3)
+
+<br>
+
+```{r, echo=FALSE, fig.width = 5, fig.height = 5, fig.align = 'center'}
+
+```
+
+<!------------------------------------------------------------------------->
+
+#### <FONT color='#0066CC'><FONT size = 4> 3.3 Classification </FONT></FONT>
+
+Le dataframe suivant compare la classification obtenue par l'AFD et les observations (Gold Standard)
+
+```{r}
+head(lda_scores)
+
+# Assume the Class column contains the predicted category labels, which can be used directly
+lda_scores$assigned_class <- lda_scores$Class  # Assign the "Class" column to "assigned_class"
+head(lda_scores$assigned_class)
+#gold_standard <- factor(data$Qualite, levels = c("bon", "moyen", "mauvais"), labels = c(1, 2, 3))
+gold_standard <- factor(data$Qualite, levels = c("bon", "moyen", "mauvais"), labels = c(1, 2, 3))
+
+# Ensure the length of `gold_standard` matches the number of rows in `lda_scores`
+length(gold_standard)
+nrow(lda_scores)
+# Create a dataframe that includes AFD classification and Gold Standard
+comparison_df <- data.frame(
+  AFD_Class = lda_scores$assigned_class,  # AFD classification results
+  Gold_Standard = gold_standard  # Custom Gold Standard
+)
+
+# View the first few rows of the comparison dataframe
+head(comparison_df)
+
+```
+
+#### <FONT color='#0066CC'><FONT size = 4> 3.4 Qualité </FONT></FONT>
+
+-   Nous pouvons maintenant réaliser la matrice des confusions en utilisant la fonction *confusionMatrix* du package *caret*
+
+```{r,message=FALSE}
+levels(comparison_df$AFD_Class)
+levels(comparison_df$Gold_Standard)
+table(comparison_df$AFD_Class)
+table(comparison_df$Gold_Standard)
+
+```
+
+```{r, message =FALSE}
+
+library(caret)
+# Convert Gold_Standard from numeric to character
+comparison_df$Gold_Standard <- factor(comparison_df$Gold_Standard, 
+                                       levels = c(1, 2, 3), 
+                                       labels = c("bon", "moyen", "mauvais"))
+conf_matrix <- confusionMatrix(as.factor(comparison_df$AFD_Class), as.factor(comparison_df$Gold_Standard))
+print(conf_matrix)
+```
+
+The confusion matrix results indicate that all predictions match the actual categories perfectly, showing an ideal classification performance. The accuracy is 100%, and the Kappa value is 1, indicating that the predictions are in complete agreement with the actual categories. The sensitivity, specificity, precision, and negative predictive value for each category are all 1, showing that the model can accurately identify both positive and negative samples for each category. The balanced accuracy also reached 1, demonstrating that the accuracy in recognizing each category is balanced and perfect.
+
+<!------------------------------------------------------------------------->
+
+#### <FONT color='#0066CC'><FONT size = 4> 3.5 Encapsulation </FONT></FONT>
+
+-   On construit une fonction ( que nous appelerons *AFD_Classif*) et qui "encapsule" le code
+
+La fonction doit retourner :
+
+-   les centre de gravités
+-   les distances de chaque individus aux centre des classes (groupes)
+-   la comparaison entre la classification réalisée par l'AFD et le gold standard
+-   la matrice de confusion (obtenue à l'aide de la fonction caret)
+
+```{r}
+AFD_Classif <- function(data, nb_axes = 2) {
+  # Extract features (X) and category labels (Y)
+  X <- as.matrix(data[, 1:4])  # Select the first four columns as features
+  Y <- factor(data$Species)    # Use the Species column as the target label (category)
+  
+  # Calculate covariance matrices
+  SS_tot <- cov(X) * (nrow(X) - 1)
+  SS_intra <- cov(X[Y == unique(Y)[1], ]) * sum(Y == unique(Y)[1]) +
+    cov(X[Y == unique(Y)[2], ]) * sum(Y == unique(Y)[2]) +
+    cov(X[Y == unique(Y)[3], ]) * sum(Y == unique(Y)[3])
+  SS_inter <- cov(X[Y == unique(Y)[1], ]) * (nrow(X) - sum(Y == unique(Y)[1])) +
+    cov(X[Y == unique(Y)[2], ]) * (nrow(X) - sum(Y == unique(Y)[2])) +
+    cov(X[Y == unique(Y)[3], ]) * (nrow(X) - sum(Y == unique(Y)[3]))
+  
+  # Apply AFD analysis (ensure the AFD function is defined)
+  results <- AFD(X, Y, SS_tot, SS_intra, SS_inter, nb_axes = nb_axes)
+  
+  # Create LDA scores dataframe
+  lda_scores <- data.frame(
+    Axis1 = results$scores[, 1],
+    Axis2 = results$scores[, 2],
+    Class = as.factor(Y)
+  )
+  
+  # Calculate centroids for each category
+  centroids <- aggregate(cbind(Axis1, Axis2) ~ Class, data = lda_scores, FUN = mean)
+  
+  # Calculate Euclidean distance from each sample to its centroid
+  distances <- data.frame()
+  for (i in 1:nrow(lda_scores)) {
+    individual <- lda_scores[i, c("Axis1", "Axis2")]
+    centroid <- centroids[centroids$Class == lda_scores$Class[i], c("Axis1", "Axis2")]
+    dist <- sqrt((individual$Axis1 - centroid$Axis1)^2 + (individual$Axis2 - centroid$Axis2)^2)
+    distances <- rbind(distances, data.frame(Class = lda_scores$Class[i], Distance = dist))
+  }
+  
+  # Create a comparison dataframe containing AFD classification and Gold Standard
+  lda_scores$assigned_class <- lda_scores$Class
+  gold_standard <- factor(data$Species, levels = c("setosa", "versicolor", "virginica"))
+  
+  comparison_df <- data.frame(
+    AFD_Class = lda_scores$assigned_class,
+    Gold_Standard = gold_standard
+  )
+  
+  # Ensure Gold_Standard and AFD_Class have consistent category order
+  comparison_df$AFD_Class <- factor(comparison_df$AFD_Class, levels = c("setosa", "versicolor", "virginica"))
+  comparison_df$Gold_Standard <- factor(comparison_df$Gold_Standard, levels = c("setosa", "versicolor", "virginica"))
+  
+  # Calculate confusion matrix
+  library(caret)
+  conf_matrix <- confusionMatrix(comparison_df$AFD_Class, comparison_df$Gold_Standard)
+  
+  # Return result list
+  return(list(
+    Centroids = centroids,
+    Distances = distances,
+    Comparison = comparison_df,
+    ConfusionMatrix = conf_matrix
+  ))
+}
+
+```
+
+<!--------------------------------------------------------------------->
+
+### <FONT color='#0066CC'><FONT size = 4> 4. Déploiement </FONT></FONT>
+
+-   Pour déployer le code, on utilisera le fichier *iris* fournit par défaut dans R
+
+```{r, echo = T}
+# Load the iris dataset
+data(iris)
+result_iris <- AFD_Classif(iris)
+
+```
+
+Les résultats sur le fichier *iris* sont les suivants
+
+-   Centres de gravité
+
+```{r}
+
+print("Centroids:")
+print(result_iris$Centroids)
+
+
+```
+
+<br>
+
+-   Distances
+
+```{r}
+print("Distances:")
+print(head(result_iris$Distances))
+
+```
+
+<br>
+
+-   Classification
+
+```{r}
+print("Comparison:")
+print(head(result_iris$Comparison))
+
+```
+
+-   Confusion
+
+```{r}
+print("Confusion Matrix:")
+print(result_iris$ConfusionMatrix)
+```
+
+The accuracy is 1, indicating that the function correctly classified all test data. The Kappa coefficient is 1, showing perfect agreement, which means the function has excellent classification performance. The P-Value [Acc \> NIR] is less than 2.2e-16, indicating that the model's accuracy is significantly higher than random guessing. Sensitivity, specificity, positive predictive value, and negative predictive value are all 1, which suggests the function's classification capability is very strong for each class. The detection rate and detection prevalence are 0.3333, indicating that the number of samples in each class is equal. The balanced accuracy is 1, showing that the function performs uniformly well across all classes.
+:::
