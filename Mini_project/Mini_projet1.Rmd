@@ -1,0 +1,521 @@
+---
+title: "Bayesian Classification Project Report"
+author: "YICHEN_LI"
+output:
+  html_document:
+    toc: true
+    toc_depth: 3
+    toc_float: true
+    theme: united
+    highlight: tango
+editor_options: 
+  markdown: 
+    wrap: 72
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+# 1.Synopsis
+
+In today's social media and online platforms, sentiment analysis has
+become an important tool for understanding user feedback and emotions.
+The aim of this project is to develop a sentiment classification model
+based on a plain Bayesian classifier that can accurately predict
+sentiment categories from text data. The Emotion Dataset from Kaggle is
+used as the data source, which contains three emotion labels,
+angers,fear,joy.An efficient and accurate sentiment classification
+system is constructed by preprocessing, feature engineering and model
+training of text data.
+
+# 2.Methodology
+
+## 2.1 Data loading and exploration
+
+### 2.1.1 Data loading
+
+Load the dataset and perform initial exploration to understand the basic
+structure and distribution of the data.
+
+```{r cars}
+options(warn = -1)
+required_packages <- c("tidyverse", "readr", "tm", "SnowballC", "textstem", 
+                       "tokenizers", "caTools", "e1071", "caret", "naivebayes", "ggplot2")
+installed_packages <- rownames(installed.packages())
+
+# Check and install missing packages
+for(pkg in required_packages){
+  if(!(pkg %in% installed_packages)){
+    install.packages(pkg, dependencies = TRUE)
+  }
+}
+
+# Load the libraries
+suppressMessages(library(tidyverse))
+suppressMessages(library(readr))
+suppressMessages(library(tm))
+suppressMessages(library(SnowballC))
+suppressMessages(library(textstem))
+suppressMessages(library(tokenizers))
+suppressMessages(library(caTools))
+suppressMessages(library(e1071))
+suppressMessages(library(caret))
+suppressMessages(library(naivebayes))
+suppressMessages(library(ggplot2))
+
+```
+
+```{r}
+# Load the data
+emotion_data <- read_csv("/Users/lyly/R_project_DSIA_YICHEN_LI/mprojet_datas/Emotion_classify_Data.csv", show_col_types = FALSE)
+
+# View data structure
+glimpse(emotion_data)
+
+# Confirm column names
+print(names(emotion_data))
+
+```
+
+Dataset with two fields: Comment: A column of textual content, e.g. "I
+seriously hate one subject to death but no..." Emotion: Sentiment
+categorical columns, such as "fear", "anger", "joy". There are a total
+of 5,937 rows in the dataset, representing 5,937 comments and their
+corresponding sentiment classifications
+
+### 2.1.2 Exploratory Data Analysis
+
+Understand the basics of the data, including category distribution, text
+lengths
+
+```{r pressure, echo=FALSE}
+# View the distribution of categories
+emotion_counts <- table(emotion_data$Emotion)
+print(emotion_counts)
+
+# Visualize the category distribution
+
+```
+
+The distribution of sentiment classifications is as follows:
+
+anger: 2000 sets fear: 1937 sets joy: 2000 sets
+
+```{r}
+# Calculate the text length
+emotion_data <- emotion_data %>%
+  mutate(text_length = nchar(Comment))
+
+# View statistics on text length
+summary(emotion_data$text_length)
+
+# Visualize the text length distribution
+ggplot(emotion_data, aes(x = text_length)) +
+  geom_histogram(binwidth = 10, fill = "lightgreen", color = "black") +
+  theme_minimal() +
+  labs(title = "Text length distribution", x = "text length", y = "frequency")
+
+```
+
+From the histogram,can see the distribution of text lengths:
+
+1.  The text length range is roughly between 0 and 300, and the text
+    length is shorter (within 100) to occupy a large proportion.
+
+2.  The frequency of text in the range of 50 to 100 is the highest, and
+    the frequency of each length segment is about 400 to 500. The number
+    of texts with a length greater than 100 gradually decreases, showing
+    a typical right-skewed distribution (long-tail distribution).
+
+3.  A small amount of text is large in length (greater than 200 or even
+    close to 300), but the amount of these data is relatively small.
+
+## 2.2 Data preprocessing
+
+### 2.2.1 Text cleaning
+
+Preprocess text data to create a corpus and clean it up for noise,
+including case differences, punctuation, numbers, stop words, and extra
+spaces. With these steps, the text is standardized into a clean format.
+
+```{r}
+# Create a text corpus
+corpus <- VCorpus(VectorSource(emotion_data$Comment))
+
+# Text preprocessing functions
+clean_corpus <- function(corpus) {
+  corpus <- tm_map(corpus, content_transformer(tolower)) # convert to lowercase
+  corpus <- tm_map(corpus, removePunctuation) # remove punctuation
+  corpus <- tm_map(corpus, removeNumbers) # remove numbers
+  corpus <- tm_map(corpus, removeWords, stopwords("en")) 
+# remove stopwords
+  corpus <- tm_map(corpus, stripWhitespace) # remove extra spaces
+  return(corpus)
+}
+
+# Clean the corpus
+corpus_clean <- clean_corpus(corpus)
+```
+
+### 2.2.2 Segmentation, Stemming and Morphological Reduction
+
+Stemming and morphology reduction with the textstem package
+
+The text is further simplified by stemming and lemmatological reduction,
+which reduces the word to its root form, while the word form also
+restores it to its base form based on the grammatical and semantic
+context of the word. The combination of the two can reduce text
+redundancy and improve the processing efficiency of the model, while
+preserving the semantic information of the text.
+
+```{r}
+# Stem extraction
+corpus_clean <- tm_map(corpus_clean, stemDocument)
+
+# Morphology reduction
+corpus_clean <- tm_map(corpus_clean, content_transformer(lemmatize_strings))
+
+```
+
+### 2.2.3 Text vectorization (TF-IDF)
+
+A document-word matrix was created (weighted using TF-IDF), sparse words
+were removed, and finally the matrix was converted into a data frame and
+sentiment labels were added, completing the numerical processing from
+text to features
+
+```{r}
+# Create a document-word matrix
+dtm <- DocumentTermMatrix(corpus_clean, control = list(weighting = weightTfIdf))
+
+# Remove sparse terms
+dtm_sparse <- removeSparseTerms(dtm, 0.99)
+
+# Convert to data frame
+data_features <- as.data.frame(as.matrix(dtm_sparse))
+
+# Add emotion labels
+data_features$Emotion <- emotion_data$Emotion
+
+```
+
+## 2.3 Training a Bayesian model
+
+### 2.3.1 Split the dataset
+
+Divide the dataset into training and testing sets (80% training, 20%
+testing)
+
+```{r}
+set.seed(123) 
+
+split <- sample.split(data_features$Emotion, SplitRatio = 0.8)
+training_set <- subset(data_features, split == TRUE)
+testing_set <- subset(data_features, split == FALSE)
+
+```
+
+### 2.3.2 Training a Simple Bayesian Classifier
+
+Using the e1071 package
+
+Based on the training dataset, a sentiment classification model was
+trained using the naïve Bayesian method, and the goal was to predict the
+sentiment category of the text by features. The advantage of the naïve
+Bayes model is that it is computationally efficient and suitable for
+processing high-dimensional data.
+
+```{r}
+# Training models
+nb_model <- naiveBayes(Emotion ~ ., data = training_set)
+
+```
+
+### 2.3.3 Model prediction
+
+Predictions on the test set
+
+```{r}
+# Make predictions
+predictions <- predict(nb_model, newdata = testing_set)
+
+# View the first few predictions
+head(predictions)
+
+```
+
+The test data were predicted by mood classification, and the first few
+prediction results were factorial variables, including the sentiment
+classification "anger", "fear" and "joy"
+
+## 2.4 Model evaluation
+
+### 2.4.1 Calculate evaluation metrics
+
+Accuracy, Precision, Recall, and F1 Score
+
+```{r}
+# Confusion matrix
+# Determine levels for all emotion categories
+emotion_levels <- levels(factor(emotion_data$Emotion))
+
+# Convert the emotion labels of the testing set to factors and set the same levels
+testing_set$Emotion <- factor(testing_set$Emotion, levels = emotion_levels)
+
+# Convert predictions to factors and set the same levels
+predictions <- factor(predictions, levels = emotion_levels)
+
+# Verify that the factor levels are the same
+print(emotion_levels)
+print(levels(testing_set$Emotion))
+print(levels(predictions))
+
+# Generate the confusion matrix
+conf_mat <- confusionMatrix(predictions, testing_set$Emotion)
+print(conf_mat)
+
+# Extract evaluation metrics
+accuracy <- conf_mat$overall['Accuracy']
+precision <- conf_mat$byClass[,'Precision']
+recall <- conf_mat$byClass[,'Recall']
+f1 <- conf_mat$byClass[,'F1']
+
+# Print the evaluation metrics
+print(paste("Accuracy:", round(accuracy, 4)))
+print("Precision per class:")
+print(precision)
+print("Recall per category:")
+print(recall)
+print("F1 score per category:")
+print(f1)
+
+```
+
+Prediction and evaluation results of Bayesian classification models. The
+overall accuracy was 45.41%, indicating that the classification effect
+of the model was limited. Among them, for the category "joy", the
+performance is relatively good, with a recall rate of 87.5%, but the
+precision rate is only 41.08%, indicating that the model can identify
+"joy" well, but there are many samples that are misjudged as "joy". On
+the two categories of "anger" and "fear", the recall rates were 26.5%
+and 21.4%, respectively, and the model had significant missing errors in
+these categories, and the overall classification performance was poor.
+
+Bayesian models may be limited by feature independence assumptions and
+biases in data distribution, resulting in uneven classification
+performance. In particular, the classification effect of "anger" and
+"fear" is poor, with F1 scores of only 0.348 and 0.324, indicating that
+the model is not able to distinguish between these categories.
+
+### 2.4.2 Visual confusion matrix
+
+```{r}
+# Convert confusion matrix to data frame
+conf_mat_df <- as.data.frame(conf_mat$table)
+colnames(conf_mat_df) <- c("actual sentiment", "predicted sentiment", "frequency")
+
+# Plot the heatmap
+ggplot(data = conf_mat_df, aes(x = `actual sentiment`, y = `predicted sentiment`, fill = frequency)) +
+  geom_tile(color = "white") +
+  scale_fill_gradient(low = "white", high = "steelblue") +
+  theme_minimal() +
+  labs(title = "Confusion matrix", x = "Actual sentiment", y = "Predicted sentiment") +
+  geom_text(aes(label = `frequency`), color = "black", size = 4)
+
+```
+
+From the confusion matrix, it can be seen that the performance of the
+Bayesian model for sentiment classification is uneven. The "joy"
+category had more predictions (350 predictions were joy, of which 350
+samples were true joy), but the proportion of false positives was high;
+The recall and specificity of "anger" and "fear" were poor, with "fear"
+only correctly predicted 83 times, and the number of false positives for
+other categories was significantly higher. This indicates that the model
+is weak in distinguishing between "anger" and "fear".
+
+# 3. Optimizations
+
+Using Random Forest models to optimize and improve the performance of
+sentiment classification. Random Forest is an integrated learning method
+that can effectively handle high-dimensional data and complex
+classification tasks by constructing multiple decision trees and
+combining their predictions.
+
+```{r}
+required_packages <- c("randomForest","dplyr")
+installed_packages <- rownames(installed.packages())
+for(pkg in required_packages){
+  if(!(pkg %in% installed_packages)){
+    install.packages(pkg, dependencies = TRUE)
+  }
+}
+
+
+suppressMessages(library(randomForest))
+suppressMessages(library(dplyr))
+
+```
+
+## 3.1 Training the Random Forest Model
+
+Using the same training and test sets as the Naive Bayes, the random
+forest model is trained and its performance evaluated.
+
+```{r}
+# Convert Emotion to factor in training and testing sets
+training_set$Emotion <- as.factor(training_set$Emotion)
+testing_set$Emotion <- as.factor(testing_set$Emotion)
+
+# Check the distribution of classes in the training set
+table(training_set$Emotion)
+
+# Train the Random Forest model
+rf_model <- randomForest(Emotion ~ ., 
+                         data = training_set, 
+                         importance = TRUE,      
+                         ntree = 500)          
+
+```
+
+## 3.2 Model Evaluation
+
+Evaluate metrics such as accuracy, precision, recall, and F1 score for
+random forest models are calculated
+
+```{r}
+# Make predictions on the test set
+predictions_rf <- predict(rf_model, newdata = testing_set)
+
+# Ensure factor levels are consistent
+emotion_levels_rf <- levels(factor(data_features$Emotion))
+testing_set$Emotion <- factor(testing_set$Emotion, levels = emotion_levels_rf)
+predictions_rf <- factor(predictions_rf, levels = emotion_levels_rf)
+
+# confusion matrix
+conf_mat_rf <- confusionMatrix(predictions_rf, testing_set$Emotion)
+
+# Extract evaluation metrics
+accuracy_rf <- conf_mat_rf$overall['Accuracy']
+precision_rf <- conf_mat_rf$byClass[,'Precision']
+recall_rf <- conf_mat_rf$byClass[,'Recall']
+f1_rf <- conf_mat_rf$byClass[,'F1']
+
+# Evaluation metrics
+print(paste("Random Forest Accuracy:", round(accuracy_rf, 4)))
+print("Random Forest Precision per class:")
+print(precision_rf)
+print("Random Forest Recall per class:")
+print(recall_rf)
+print("Random Forest F1 Score per class:")
+print(f1_rf)
+
+```
+
+The random forest model performed relatively well in classifying "joy"
+and "fear", among which "joy" had a high recall rate (74.75%) and an
+outstanding precision rate of "fear" (75.75%). However, for the "anger"
+category, the recall rate (51%) and F1 score (0.5581) were low,
+indicating that the model has limited ability to distinguish between the
+categories
+
+## 3.3 Cross-validation (Bayesian model)
+
+Evaluate the robustness of the model using k-fold cross-validation
+
+```{r}
+# Set the cross-validation parameters
+train_control <- trainControl(method = "cv", number = 10)
+
+# Use cross-validation to train the model
+nb_cv <- train(Emotion ~ ., data = data_features, method = "naive_bayes", trControl = train_control)
+
+# Check the cross-validation results
+print(nb_cv)
+
+```
+
+The best parameter of the Naive Bayes model in the 10-fold
+cross-validation is usekernel = FALSE, the accuracy is 46.02%, and the
+Kappa value is only 0.1871, indicating that the performance of the model
+for sentiment classification is relatively average, and the
+classification consistency is low. Although the performance is slightly
+better without kernel density estimation, the overall accuracy and
+consistency are low, which may be due to the obvious limitations of the
+naïve Bayes model for tasks with complex category distributions
+
+# 4. Results
+
+## 4.1 Interpretation of results
+
+1.  The Naive Bayes model performed moderately in the emotion
+    classification task, with the best cross-validation accuracy of
+    46.02% and a Kappa value of 0.1871. Although the model is able to
+    distinguish between different sentiment categories to some extent,
+    the categorical consistency is low. The model outperforms the other
+    categories in the "joy" category, probably because the sample size
+    of this category is larger, which helps the model capture patterns.
+    However, for both "anger" and "fear", the recall and precision are
+    low, indicating that the model has limited ability to distinguish
+    between these categories.
+
+2.  The accuracy of the random forest model (61.58%) was significantly
+    higher than that of Naive Bayes (46.02%), which indicates that the
+    assumption of Naive Bayes (feature independence) has limitations in
+    practical tasks, especially in tasks with complex associations such
+    as text sentiment classification.
+
+## 4.2 Challenge Analysis
+
+1.  Feature independence assumption: The naïve Bayes model assumes that
+    features are independent, which is often difficult to satisfy in
+    text data, because words in text tend to have strong correlations
+    (e.g., "hate" and "fear" often appear together).
+
+2.  Insufficient feature expression: Text features only use basic word
+    frequency or TF-IDF methods, which may fail to fully capture the
+    deep semantic features of emotions (such as syntactic relationships
+    and contextual information).
+
+3.  Model simplicity: The naïve Bayesian model is suitable for handling
+    linear and simple tasks, and may not perform well for complex
+    multi-class text classification problems.
+
+# 5.Conclusion and future work
+
+## 5.1 Summarize the results
+
+1.  The performance of the Naive Bayes model in sentiment classification
+    is limited, with an accuracy of only 46.02% and a Kappa value of
+    0.1871, and the classification performance is obviously affected by
+    the assumption of feature independence and category imbalance.
+
+2.  The accuracy of the random forest model is 61.58%, which has a
+    significant improvement in classification performance, indicating
+    that the nonlinear model has stronger applicability in this task.
+
+## 5.2 Suggestions for improvement
+
+1.  Improve feature extraction. Use word embeddings such as Word2Vec,
+    GloVe, or BERT instead of TF-IDF methods to capture the semantic and
+    contextual information of words. Introduce sentiment dictionaries or
+    sentiment analysis tools to enhance the model's perception of
+    emotion-related words.
+
+2.  Optimize model selection. Use more complex models such as support
+    vector machines (SVMs), gradient boosting decision trees (e.g.,
+    XGBoost), or deep learning models (e.g., LSTM, BERT).
+
+3.  In the deep learning model, combine pre-trained language models
+    (such as BERT, RoBERTa) to fine-tune to make full use of corpus
+    information.
+
+## 5.3 Future Research Directions
+
+1.  Multi-model fusion. Combine naive Bayes, random forests, and deep
+    learning models to further improve classification performance
+    through model fusion, such as voting mechanisms or stacking.
+
+2.  Dynamic sentiment analysis. Extend model capabilities to explore
+    trends in sentiment over time for use on time series data or
+    real-time sentiment analysis.

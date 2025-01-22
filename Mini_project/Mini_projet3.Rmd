@@ -1,0 +1,315 @@
+---
+title: "French Doctoral Dissertation Field Classification: Bayesian and Discriminant Analysis"
+author: "YICHEN_LI"
+output:
+  html_document:
+    toc: true
+    toc_depth: 3
+    toc_float: true
+    theme: united
+    highlight: tango
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+options(repos = c(CRAN = "https://cran.rstudio.com/"))
+```
+
+# 1.Introduction
+
+The data used in this project comes from the Kaggle platform and includes a dataset of semantic similarity for French doctoral thesis abstracts. This data is primarily in text form and aims to study the semantic features and affiliated domains of the abstracts. Each data record corresponds to an abstract of a doctoral thesis and is labeled with the category of the research field. The characteristics of the data include its high semantic complexity, diversity of research fields, and the potential presence of class imbalance, such as a significantly higher number of papers in certain fields compared to others.
+
+The goal of this project is to develop a system based on Bayesian classifiers and discriminant factor analysis for the automated classification of abstracts of doctoral dissertations in French. Firstly, natural language processing (NLP) technology was used to extract the semantic features in the abstract, and the core topic of the paper was explored through the topic modeling method. Then, a Bayesian classification model suitable for high-dimensional text data was constructed, and the hyperparameters were optimized to improve the classification performance. Finally, the accuracy of the model is verified by performance evaluation and discriminant factor analysis.
+
+# 2. Methods
+
+## 2.1 Load the necessary libraries and data
+
+```{r}
+required_packages <- c("tidyverse", "data.table", "tm", "MASS", "e1071", "caret", "RcppCNPy", "ggplot2", "pheatmap","topicmodels","caret")
+
+missing_packages <- required_packages[!(required_packages %in% installed.packages()[, "Package"])]
+if (length(missing_packages) > 0) {
+  install.packages(missing_packages, dependencies = TRUE)
+}
+
+suppressMessages({
+  invisible(lapply(required_packages, library, character.only = TRUE))
+})
+
+# Load the paper metadata
+metadata <- fread("/Users/lyly/R_project_DSIA_YICHEN_LI/mprojet_datas/mprojet3_data/french_thesis_20231021_metadata.csv")
+
+# Loading embedding vectors (.npy format)
+embeddings <- npyLoad("/Users/lyly/R_project_DSIA_YICHEN_LI/mprojet_datas/mprojet3_data/french_thesis_20231021_embeddings.npy")
+
+# Load the list of training set papers
+training_list <- readLines("/Users/lyly/R_project_DSIA_YICHEN_LI/mprojet_datas/mprojet3_data/training_list_2000.txt")
+```
+
+```{r}
+# View the column name of the metadata
+cat("The name of the column for the metadata:\n")
+print(colnames(metadata))
+
+```
+
+## 2.2 Data preprocessing
+
+Clean up text data, remove stop words, punctuation.
+
+```{r}
+# Text cleanup function
+clean_text <- function(text) {
+  text <- tolower(text)                    # Lowercase
+  text <- removePunctuation(text)          # Remove punctuation
+  text <- removeNumbers(text)              # Remove numbers
+  text <- removeWords(text, stopwords("fr")) # Remove French stop words
+  text <- stripWhitespace(text)            # Remove extra spaces
+  return(text)
+}
+
+# Clean up the "Short description" column
+metadata$cleaned_description <- sapply(metadata$`Short description`, clean_text)
+```
+
+## 2.3 Feature extraction
+
+The features corresponding to the training data are extracted from the embedding matrix first, and the corresponding metadata is extracted to generate the target variable (research field label)
+
+1. Convert the training data list training_list into a numeric index that is used to extract the corresponding features from the embedding matrix.
+
+2. Extract the labels corresponding to the training set from the metadata, and make sure that the labels are of factor type so that they can be applied to the classification model.
+
+```{r}
+# Convert training_list to numeric
+training_list_numeric <- as.numeric(training_list)
+
+# Extract embedding features
+features <- embeddings[training_list_numeric, ]
+cat("Feature dimensions: ", dim(features), "\n")
+
+# Extract the target variable corresponding to the metadata
+metadata_train <- metadata[training_list_numeric, ]
+labels <- metadata_train$Domain
+cat("Number of target variables: ", length(labels), "\n")
+
+# Make sure labels is of the factor type
+if (!is.factor(labels)) {
+  labels <- as.factor(labels)
+  cat("Labels have been converted to a factor type\n")
+}
+
+```
+The features of 2000 samples were extracted from the embedding matrix, each sample contained 768 feature dimensions, and 2000 target variables were extracted from the metadata and converted into factor types.
+
+## 2.4 Dimensionality reduction
+
+Some features may have constant values (with a standard deviation of 0) that do not provide any useful information in the classification task and therefore need to be removed from the dataset. Linear Discriminant Analysis (LDA) was used to reduce the dimensionality of features.
+
+1. Identify constant features by calculating the standard deviation of each feature and remove them from the feature matrix.
+
+2. Linear Discriminant Analysis (LDA) is used to reduce dimensionality, and high-dimensional features are projected into low-dimensional space, while retaining the discrimination information between categories.
+
+```{r}
+# Removes the constant feature
+feature_sd <- apply(features, 2, function(x) sd(x))
+constant_features <- which(feature_sd == 0)
+if (length(constant_features) > 0) {
+  cat("Number of constant features: ", length(constant_features), "\n")
+  features <- features[, -constant_features]
+} 
+cat("Feature dimensions after removing a constant feature: ", dim(features), "\n")
+
+# Perform LDA
+lda_model <- lda(features, grouping = labels)
+
+# Extract features after dimensionality reduction
+features_lda <- predict(lda_model)$x
+colnames(features_lda) <- paste0("LD", 1:ncol(features_lda))  
+cat("Dimensionality reduction is completed, and the feature dimension is as follows: ", dim(features_lda), "\n")
+
+```
+Four constant features were successfully detected and removed, and although the number of features after dimensionality reduction did not decrease, the data may have been linearly transformed by the LDA method, providing more discriminating features for the classification task.
+
+## 2.5 Bayesian classification
+
+The Naïve Bayes model was used to classify the reduced data. The Naive Bayes model is a simple and efficient probability-based classification method, which is especially suitable for the classification task of processing text or high-dimensional data. In this step, the dimensionality reduction feature data is randomly divided into a training set and a test set at a ratio of 8:2, and the naïve Bayes model is trained using the training set. Subsequently, the test set was used to make predictions, and the classification effect of the model was evaluated by the confusion matrix
+
+```{r}
+# Divide the training set and the test set
+set.seed(123)
+train_index <- sample(seq_len(nrow(features_lda)), size = 0.8 * nrow(features_lda))
+train_data <- features_lda[train_index, ]
+train_labels <- labels[train_index]
+test_data <- features_lda[-train_index, ]
+test_labels <- labels[-train_index]
+
+# Train a naïve Bayesian model
+nb_model <- naiveBayes(train_data, train_labels)
+
+# Test set prediction
+predictions <- predict(nb_model, test_data)
+
+# Calculate the confusion matrix for the initial model
+cm_1 <- confusionMatrix(predictions, test_labels)
+
+
+```
+
+## 2.6 Model optimization
+
+In the initial model, the small number of samples for certain categories in the dataset can lead to poor classification performance on those categories. To solve this problem, a category merging strategy was introduced, merging rare categories with less than 10 samples into a new category "Other". This can reduce the negative impact of category imbalance on model training and prediction, and improve the overall performance and generalization ability of the model.
+
+First, the number of samples for each category is counted, and rare categories are identified, and then these categories are combined into "Other". In order to maintain the consistency of the categorical distribution, the hierarchical sampling (createDataPartition) method was used to repartition the training and test sets. Subsequently, the naïve Bayes classification model was retrained on the new label data and predicted on the test set. By comparing the confusion matrices (cm_1 and cm_2 before and after optimization, can evaluate the effectiveness of your optimization strategy.
+
+```{r}
+set.seed(123)
+
+# Merge Rare Category as "Other"
+# Define thresholds for rare categories (sample ≤ 10)
+threshold <- 10
+
+# Count the number of samples for each category
+label_counts <- table(labels)
+
+# Identify rare categories
+rare_classes <- names(label_counts[label_counts <= threshold])
+
+# Merge Rare Categories into "Other"
+labels_modified <- as.character(labels)  
+labels_modified[labels_modified %in% rare_classes] <- "Other" 
+labels_modified <- factor(labels_modified)  
+
+# Use createDataPartition for hierarchical sampling to keep the distribution of categories consistent between the training and test sets
+train_index <- createDataPartition(labels_modified, p = 0.8, list = FALSE)
+train_data <- features_lda[train_index, ]
+train_labels <- labels_modified[train_index]
+test_data <- features_lda[-train_index, ]
+test_labels <- labels_modified[-train_index]
+
+# Train a naïve Bayesian model
+nb_model <- naiveBayes(train_data, train_labels)
+
+# Make predictions on the test set
+predictions <- predict(nb_model, test_data)
+
+cm_2 <- confusionMatrix(predictions, test_labels)
+
+```
+
+# 3. Results
+
+## 3.1 Performance Evaluation
+
+```{r}
+# Extract performance metrics
+
+# Initial model
+accuracy_1 <- cm_1$overall["Accuracy"]
+
+# Optimize the model
+accuracy_2 <- cm_2$overall["Accuracy"]
+
+print("Initial Model Performance Metrics:")
+print(paste("Accuracy:", round(accuracy_1, 4)))
+
+print("Optimize model performance metrics:")
+print(paste("Accuracy:", round(accuracy_2, 4)))
+
+```
+The initial model performed poorly with an accuracy of 37.25%, mainly because the Bayesian model is sensitive to category distributions, and there are rare classes with very few samples in the dataset. When the Bayesian classifier calculates the conditional probability of the category, the insufficient sample of the rare category will lead to the instability of the probability estimation, which will affect the overall classification performance. In addition, the existence of rare classes may cause the model to overfit these classes in the optimization process, while ignoring the feature learning of the main classes, which ultimately reduces the generalization ability of the model.
+
+After optimization, the balance of the class distribution was adjusted by merging rare classes with less than 10 samples into "Other", which significantly improved the model performance, and the optimized accuracy was increased to 93.83%. When processing the optimized data, the Bayesian model can estimate the conditional probabilities of each category more stably, and focus on the distinguishing features of the main classes, giving full play to its advantages based on probability inference. This result shows that the evenness of the data distribution is very important to the performance of the Bayesian classifier when processing high-dimensional data.
+
+## 3.2 Analysis of important characteristics of LDA
+
+Linear Discriminant Analysis (LDA) is a supervised learning technique for dimensionality reduction, the goal of which is to map high-dimensional data to lower-dimensional discriminant spaces by maximizing separability between classes and minimizing variance within classes. In LDA, the contribution of each Discriminant Axis to classification is determined by the weight values in the feature scaling matrix, and the magnitude of the weight values reflects the importance of each feature to the corresponding discriminant axis.
+
+The weight matrix of the LDA model was extracted, and the top 5 most important features on each discriminant axis were identified. In addition, we counted the frequency of these important features in all discriminant axes, and finally generated a data frame containing the names of features and their importance counts in order to rank and analyze the importance of features.
+
+```{r}
+# Extract the LDA weight matrix
+lda_weights <- lda_model$scaling
+
+# Get the top 5 features that are most important for each discriminant axis
+top_n <- 5
+top_features <- apply(lda_weights, 2, function(x) {
+  important_features <- order(abs(x), decreasing = TRUE)[1:top_n]
+  return(important_features)
+})
+
+# Convert to vectors and count frequencies
+top_features_vector <- as.vector(top_features)
+feature_counts <- table(top_features_vector)
+sorted_feature_counts <- sort(feature_counts, decreasing = TRUE)
+
+# Converts the feature number to a numeric type
+top_features_named <- as.numeric(names(sorted_feature_counts))
+feature_names <- colnames(features)
+
+if (is.null(feature_names) || any(feature_names == "")) 
+  feature_names <- paste0("Feature", 1:ncol(features))
+  colnames(features) <- feature_names
+
+# Check if the feature number is out of range
+max_feature_id <- length(feature_names)
+
+# Map the feature number to the name, and those that are out of range will get NA
+feature_names_selected <- feature_names[top_features_named]
+na_indices <- which(is.na(feature_names_selected))
+
+# Create a data frame that contains the feature name and count
+feature_importance_df <- data.frame(
+  Feature_ID = top_features_named,
+  Feature_Name = feature_names_selected,
+  Count = as.numeric(sorted_feature_counts)
+)
+
+# Check out the top 10 most important features
+print(head(feature_importance_df, 10))
+
+```
+As can be seen from the table, Feature461 is the most important feature in the LDA model, and it is selected as the top 5 important features in the discriminant axis up to 320 times, significantly more than the other features. This indicates that Feature461 plays a central role in category discrimination and is the feature that contributes the most to the discriminant power of the model. Other features, such as Feature692 and Feature567, were selected 113 and 91 times, respectively, indicating that they also have a high discriminative ability in the model, but their importance is significantly weaker than that of Feature461. Lower-ranking features, such as Feature641, may still have some class discrimination on some discriminant axes, although less frequent.
+
+This result shows that the important features of the LDA model have the characteristics of concentration and long-tail distribution: a few features contribute more to the discriminant power of the model, while most of the features have a low importance.
+
+## 3.3 visualization
+
+```{r}
+# Distribution of papers after dimensionality reduction
+lda_df <- data.frame(features_lda, labels)
+colnames(lda_df) <- c("Dim1", "Dim2", "Domain")
+
+# Draw a scatter plot of the reduced dimensionality distribution
+ggplot(lda_df, aes(x = Dim1, y = Dim2, color = Domain)) +
+  geom_point(alpha = 0.7) +
+  theme_minimal() +
+  labs(
+    title = "The distribution of papers after LDA dimensionality reduction",
+    x = "LD1",
+    y = "LD2"
+  )
+
+
+```
+
+This graph shows the distribution of papers after dimensionality reduction by LDA (Linear Discriminant Analysis), forming multiple dense regions on the two main discriminant dimensions (LD1 and LD2). The distribution of data points shows that LDA effectively captures the difference information between some categories during dimensionality reduction, and some categories have obvious clustering trends in low-dimensional space. However, there is also a large range of overlapping point distributions in the graph, especially in the -5 to 5 range of LD1, suggesting that some classes may not be sufficiently discriminative and may be related to the lack of semantic similarity or features of the categories.
+
+From the point of view of color distribution, the points of some categories are concentrated in a specific area, while others are more scattered, indicating that LDA can distinguish some categories well, but there are still limitations to overlapping categories. LDA captures the main categorical distribution features in two linear dimensions, but due to its linear nature, it may not fully reflect the nonlinear relationships of complex data
+
+# 4.Conclusion
+
+Through the processing, dimensionality reduction and classification analysis of abstract data of French doctoral dissertation, a text classification method based on Bayesian classifier and linear discriminant analysis (LDA) was explored. In the data preprocessing, the constant features were identified and removed, and the high-dimensional data was successfully projected into the low-dimensional discriminant space by using LDA, which preliminarily revealed the category distribution characteristics of the data. By analyzing the LDA weight matrix, the features that contribute the most to the category discrimination are further identified, which provides a strong basis for the subsequent model optimization and feature selection.
+
+In classification modeling, the initial model performed poorly (only 37.25% accuracy), mainly due to the uneven distribution of categories and the presence of rare classes. By merging the rare categories into "Other" and re-stratifying the dataset, the accuracy of the optimized model was greatly improved to 93.83%, indicating that the balance of data distribution is crucial to the improvement of Bayesian classifier performance. Although LDA performs well in dimensionality reduction, there is still some overlap in the categories in the low-dimensional space, reflecting the semantic complexity of text data and the limitations of linear methods.
+
+This experiment verifies the effectiveness of Bayesian classifiers and LDA methods in text classification tasks, but also reveals the direction of further improvement, such as the introduction of nonlinear dimensionality reduction techniques (such as t-SNE or UMAP) and more complex classification models (such as random forests or deep learning) to better capture the category discrimination information in complex data.
+
+
+
+
+
+
+
+

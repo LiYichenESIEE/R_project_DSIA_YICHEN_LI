@@ -1,0 +1,263 @@
+---
+title: "Twitter Sentiment Analysis Using Discriminant Factor Analysis (AFD)"
+author: "YICHEN_LI"
+output:
+  html_document:
+    toc: true
+    toc_depth: 3
+    toc_float: true
+    theme: united
+    highlight: tango
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+# 1.Introduction
+
+As an important research direction in the field of natural language processing, sentiment analysis plays a key role in understanding user behavior and public opinion trends. Social media platforms, such as Twitter, present unique challenges for sentiment analysis due to their short text, high noise, and high-dimensional characteristics. Based on the Twitter sentiment analysis dataset, this project uses the analytical factor discrimination method (AFD) to reduce the dimensionality and classify the data, so as to realize the visualization of sentiment categories and the evaluation of clustering quality, so as to explore the application potential and practical effect of AFD in high-dimensional text data.
+
+This project uses the Twitter Entity Sentiment Analysis dataset from the Kaggle platform. The dataset contains more than 70,000 Tweets related to a specific entity (such as a brand, person, or event), and sentiment labels are divided into Positive (20,831), Neutral (18,318), Negative (22,542), and Irrelevant (12,990), reflecting users' attitudes toward entities. The Tweets in the dataset are short and concise, contain unstructured text (such as emojis, abbreviations, etc.), and are relatively unevenly distributed in sentiment categories. These characteristics bring challenges to sentiment analysis, and also provide an ideal test scenario for studying dimensionality reduction and classification methods for high-dimensional text data, such as analytical factor discrimination (AFD). The project aims to explore the application value of AFD in high-dimensional text analysis by degrading, visualizing, and classifying affective data.
+
+# 2. Methods
+
+## 2.1 Load the necessary libraries and data
+
+```{r}
+suppressMessages({
+  library(tidyverse)
+  library(tm)
+  library(SnowballC)
+  library(MASS)
+  library(ggplot2)
+  library(text2vec)
+  library(caret)
+  library(Matrix) 
+  library(irlba)  
+})
+
+# Define a function to delete URLs
+removeURL <- content_transformer(function(x) gsub("http[^[:space:]]*", "", x))
+
+training_path <- "/Users/lyly/R_project_DSIA_YICHEN_LI/mprojet_datas/mprojet2_data/twitter_training.csv"
+validation_path <- "/Users/lyly/R_project_DSIA_YICHEN_LI/mprojet_datas/mprojet2_data/twitter_validation.csv"
+
+training_data <- read.csv(training_path, stringsAsFactors = FALSE)
+validation_data <- read.csv(validation_path, stringsAsFactors = FALSE)
+
+# Rename the column name
+colnames(training_data) <- c("id", "entity", "sentiment", "tweet")
+colnames(validation_data) <- c("id", "entity", "sentiment", "tweet")
+
+# View the data structure
+str(training_data)
+cat("\n")
+str(validation_data)
+```
+
+The training set and the validation set have the same structure, and each dataset contains four columns of variables: id (tweet ID, integer), entity (entity name, character), sentiment (sentiment tag, character), and tweet (tweet content, character). The training set has 74,681 records and the validation set has 999 records. Tweet content is text related to a specific entity, sentiment labels include categories such as Positive, Neutral, and Negative, and data is characterized by short text, unstructured, and high-dimensional
+
+## 2.2 Data Cleansing
+
+In sentiment analysis tasks, Tweet text often contains a lot of noise, such as URL links, punctuation, extra spaces, and stop words, which can affect feature extraction and the classification performance of the model. Therefore, cleaning up the text is a necessary step before modeling. With clean_corpus functions, can convert text into a uniform format and remove unnecessary information.
+
+```{r}
+# Data cleansing function
+clean_corpus <- function(corpus) {
+  corpus <- tm_map(corpus, content_transformer(tolower))    # Convert to lowercase
+  corpus <- tm_map(corpus, removeURL)             # Remove URLs
+  corpus <- tm_map(corpus, removePunctuation)     # Remove punctuation
+  corpus <- tm_map(corpus, removeNumbers)         # Remove numbers
+  corpus <- tm_map(corpus, removeWords, stopwords("english")) # Remove stopwords
+  corpus <- tm_map(corpus, stripWhitespace)  # Remove extra whitespace
+  corpus <- tm_map(corpus, stemDocument)          # Perform stemming
+  return(corpus)
+}
+
+# Cleaning the training and validation datasets
+training_corpus <- VCorpus(VectorSource(training_data$tweet))
+training_corpus_clean <- clean_corpus(training_corpus)
+training_tweets <- sapply(training_corpus_clean, as.character)
+
+validation_corpus <- VCorpus(VectorSource(validation_data$tweet))
+validation_corpus_clean <- clean_corpus(validation_corpus)
+validation_tweets <- sapply(validation_corpus_clean, as.character)
+
+```
+
+## 2.3 Feature Engineering
+
+In sentiment analysis, the high-dimensional sparsity of tweet data often brings great challenges to modeling, especially when using TF-IDF to extract text features, the dimensions will grow sharply with the vocabulary, resulting in increased computational complexity and storage requirements. Therefore, it is necessary to simplify the data through feature extraction and dimensionality reduction methods while retaining the most important information for sentiment classification. To solve these problems, I first utilized TF-IDF to extract text features from tweets and reduce the dimensionality of the feature space by retaining high-frequency words. Then, principal component analysis (PCA) was further applied to reduce the dimensionality of the high-dimensional sparse matrix, and the original high-dimensional features were mapped into a low-dimensional space composed of 500 principal components.
+
+```{r}
+# Convert sentiment labels to numeric values
+all_sentiments <- unique(c(training_data$sentiment, validation_data$sentiment))
+training_data$sentiment <- factor(training_data$sentiment, levels = all_sentiments)
+training_data$sentiment_num <- as.numeric(training_data$sentiment)
+
+validation_data$sentiment <- factor(validation_data$sentiment, levels = all_sentiments)
+validation_data$sentiment_num <- as.numeric(validation_data$sentiment)
+
+# TF-IDF feature extraction
+training_it <- itoken(training_tweets, progressbar = FALSE)
+validation_it <- itoken(validation_tweets, progressbar = FALSE)
+
+# Create vocabulary and prune low-frequency words
+vocab <- create_vocabulary(training_it)
+pruned_vocab <- prune_vocabulary(vocab, term_count_min = 5)  # Keep only high-frequency words
+vectorizer <- vocab_vectorizer(pruned_vocab)
+
+# Generate sparse TF-IDF matrices
+training_dtm <- create_dtm(training_it, vectorizer)
+validation_dtm <- create_dtm(validation_it, vectorizer)
+
+tfidf_transformer <- TfIdf$new()
+training_dtm_tfidf <- tfidf_transformer$fit_transform(training_dtm)
+validation_dtm_tfidf <- tfidf_transformer$transform(validation_dtm)
+
+# Convert to sparse matrices
+training_tfidf_sparse <- Matrix(as.matrix(training_dtm_tfidf), sparse = TRUE)
+validation_tfidf_sparse <- Matrix(as.matrix(validation_dtm_tfidf), sparse = TRUE)
+
+# PCA for dimensionality reduction
+pca <- prcomp_irlba(training_tfidf_sparse, n = 500)  # Retain the top 500 principal components
+
+# Convert PCA results to data frames
+training_pca <- as.data.frame(pca$x)
+training_pca$sentiment <- training_data$sentiment_num
+
+# Apply PCA transformation to the validation set
+validation_pca <- as.data.frame(predict(pca, newdata = validation_tfidf_sparse))
+validation_pca$sentiment <- validation_data$sentiment_num
+
+```
+
+# 3.Implementation of AFD
+
+## 3.1 Mathematics of AFD
+
+Linear Discriminant Analysis (LDA), also referred to as Analytical Factorial Discriminant (AFD), is a dimensionality reduction technique that aims to maximize class separability while minimizing the intra-class variability. It achieves this by projecting high-dimensional data into a lower-dimensional space using a projection matrix $W$.
+
+The mathematics behind AFD involves the computation of two key scatter matrices: the between-class scatter matrix($S_B$) and the within-class scatter matrix($S_W$). The optimization objective is to find a transformation $W$ that maximizes the ratio of the between-class scatter to the within-class scatter.
+
+Key Equations:
+
+1.  Between-Class Scatter Matrix ($S_B$): The between-class scatter measures how far apart the mean vectors of different classes are. It is defined as: $$
+    S_B = \sum_{i=1}^k n_i (\mu_i - \mu)(\mu_i - \mu)^\top
+    $$ where:
+    -   $\mu_i$: The mean vector of class $i$.
+    -   $\mu$: The overall mean vector of all samples.
+    -   $n_i$: The number of samples in class $i$.
+2.  Within-Class Scatter Matrix ($S_W$): The within-class scatter measures how closely the samples of the same class cluster around their mean. It is defined as: $$
+    S_W = \sum_{i=1}^k \sum_{x \in C_i} (x - \mu_i)(x - \mu_i)^\top
+    $$ where:
+    -   $C_i$: The set of samples in class $i$.
+3.  Optimization Objective: To maximize class separability, AFD maximizes the ratio of the determinant of the between-class scatter matrix to the determinant of the within-class scatter matrix: $$
+    \text{Objective: } \quad \max_W \frac{|W^\top S_B W|}{|W^\top S_W W|}
+    $$ This can be formulated as a generalized eigenvalue problem: $$
+    S_W^{-1} S_B W = \lambda W
+    $$ where:
+    -   $\lambda$: Eigenvalues, representing the separability between classes.
+    -   $W$: Eigenvectors, forming the projection matrix.
+4.  Dimensionality Reduction: The top $d$ eigenvectors corresponding to the largest eigenvalues are selected to form the projection matrix $W$. This transforms the original data $X$ into the lower-dimensional space: $$
+    Z = W^\top X
+    $$
+
+Through the above process, AFD ensures that the data in the lower-dimensional space retains maximal class separability, making it suitable for tasks such as classification and visualization.
+
+## 3.2 AFD Model Training and Visualization
+
+With LDA,can not only map high-dimensional data to a low-dimensional space, but also classify and visualize categories of data. In this project, based on the results of PCA dimensionality reduction in the previous stage, the LDA model was trained, and the dimensionality reduction analysis of the training set and the validation set was carried out. Subsequently, the distribution of different categories in the low-dimensional space is visualized to be visualized.
+
+```{r}
+# Train the LDA model
+lda_model <- lda(sentiment ~ ., data = training_pca)
+
+# Dimensionality reduction results for the training set
+training_lda <- predict(lda_model, training_pca)$x
+
+# Dimensionality reduction results for the validation set
+validation_lda <- predict(lda_model, validation_pca)$x
+
+# Visualization for the training set
+training_plot <- data.frame(
+  LD1 = training_lda[,1],
+  LD2 = if(ncol(training_lda) > 1) training_lda[,2] else NA,
+  Sentiment = as.factor(training_pca$sentiment)
+)
+
+if (ncol(training_lda) > 1) {
+  ggplot(training_plot, aes(x = LD1, y = LD2, color = Sentiment)) +
+    geom_point(alpha = 0.7) +
+    theme_minimal() +
+    labs(title = "AFD: Training Set Results Visualization")
+} else {
+  ggplot(training_plot, aes(x = LD1, fill = Sentiment)) +
+    geom_density(alpha = 0.5) +
+    theme_minimal() +
+    labs(title = "AFD: Training Set Single Factor Distribution")
+}
+
+# Visualization for the validation set
+validation_plot <- data.frame(
+  LD1 = validation_lda[,1],
+  LD2 = if(ncol(validation_lda) > 1) validation_lda[,2] else NA,
+  Sentiment = as.factor(validation_pca$sentiment)
+)
+
+if (ncol(validation_lda) > 1) {
+  ggplot(validation_plot, aes(x = LD1, y = LD2, color = Sentiment)) +
+    geom_point(alpha = 0.7) +
+    theme_minimal() +
+    labs(title = "AFD: Validation Set Results Visualization")
+} else {
+  ggplot(validation_plot, aes(x = LD1, fill = Sentiment)) +
+    geom_density(alpha = 0.5) +
+    theme_minimal() +
+    labs(title = "AFD: Validation Set Single Factor Distribution")
+}
+
+```
+
+1.The first figure ("AFD: Training Set Results Visualization") shows the dimensionality reduction results of the LDA model on the training set. As can be seen from the figure, the sample points of different affective categories show a certain degree of separation on the two linear discriminant factors of LD1 and LD2. The distribution between the red (1) and green (2) categories is more pronounced, while there is some overlap between the purple (4) and green (2) categories. In general, the distribution of classes in the training set has a clear clustering, indicating that the LDA model can capture the main class discrimination information.
+
+2.The second figure ("AFD: Validation Set Results Visualization") shows the dimensionality reduction results of the LDA model on the validation set. Compared with the training set, different classes showed more obvious overlap in the validation set, and the resolution between the classes was reduced. In particular, the distribution of sample points between red (class 1), green (class 2), and blue (class 3) is mixed, suggesting that the LDA model has a weak generalization ability on the validation set. This phenomenon may be due to the difference between the feature distribution of the validation set and the training set.
+
+## 3.3 Model Evaluation
+
+In a classification task, the performance of the model needs to be evaluated by a validation set to measure its generalization ability. The evaluation criteria for LDA models typically include consistency between the predicted results and the actual class, which can be achieved by calculating the confusion matrix and accuracy. The confusion matrix provides a visual representation of the distribution of classification errors, while accuracy is a concise indicator of overall performance.
+
+```{r}
+# Model evaluation
+validation_predictions <- predict(lda_model, validation_pca)$class  
+conf_matrix <- confusionMatrix(validation_predictions, as.factor(validation_pca$sentiment)) 
+
+# confusion matrix and accuracy
+print(conf_matrix) 
+accuracy <- conf_matrix$overall['Accuracy'] 
+print(paste("Validation Set Accuracy:", round(accuracy * 100, 2), "%"))  
+
+```
+
+The evaluation results of the model on the validation set showed that the overall accuracy was 57.46% with confidence intervals (54.32%, 60.55%), which was significantly higher than the no information rate of random classification (28.53%), and was statistically significant (P-value \< 2.2e-16). From the confusion matrix, it can be seen that there is a certain degree of confusion between the different categories, especially the misclassification of categories 2 and 3. The sensitivity and specificity of the statistics by category showed that the model had a strong detection ability for category 3 (70.68% sensitivity) and a weak detection ability for category 4 (sensitivity 30.99%). At the same time, the classification balance accuracy of the model in different categories is in the range of 63% to 74%, indicating that there are certain differences in classification performance between categories.
+
+# 4.Discussion and conclusion
+
+## 4.1 Discussion
+
+In this study, linear discriminant analysis (AFD) was used to reduce the dimensionality and classify the sentiment data of tweets. Through the analysis of the dimensionality reduction results of the training set and the validation set, it is found that different sentiment categories show a certain degree of separation in the low-dimensional space. In the training set, the distribution between categories is clear, indicating that AFD can effectively extract the main distinguishing features of affective categories. However, the results of the validation set show that there is a large overlap between the different categories, especially the poor separation of category 4 from the other categories. This phenomenon may be due to the difference between the feature distribution of the validation set and the training set, or the overlap of the distribution of the categories themselves in the feature space. The confusion matrix further revealed the classification performance of the model, with category 3 having a strong detection ability (70.68% sensitivity) and category 4 having a weak detection ability (30.99% sensitivity). The overall accuracy of the validation set was 57.46%, which was significantly higher than the no-information rate of random classification (28.53%), but it still showed that the AFD model had some limitations when processing complex sentiment data.
+
+## 4.2 results
+
+In this study, the dimensionality reduction and classification analysis of tweet sentiment data were carried out by AFD method, and the results showed that AFD could effectively project high-dimensional sentiment data into low-dimensional space, and realize the differentiation of emotion categories to a certain extent. However, due to the linear assumption of AFD, its performance in sentiment data classification with nonlinear boundaries is limited. The performance on the validation set further reveals the insufficient generalization ability of the AFD model, indicating that the complexity of the sentiment analysis task may require a more complex model to solve.
+
+# 5. Future work
+
+In view of the results and findings of this study, future work can be carried out from the following aspects.
+
+1.  Introduce nonlinear dimensionality reduction methods, such as t-SNE and UMAP, to capture the nonlinear structure in the data and enhance the category separation effect. At the same time, we explore deep learning-based dimensionality reduction methods, such as AutoEncoder, to further extract semantic features in tweets.
+
+2.  Adopt more robust classification models, such as support vector machines (SVMs) or deep neural networks (such as BERT), that are better able to adapt to the high dimensionality and complexity of Tweet sentiment data.
+
+3.  In terms of feature engineering, in the future, we can try to combine pre-trained language models (such as Word2Vec, GloVe, or BERT) to generate more semantic embedding representations, and introduce sentiment dictionaries or contextual semantic information to improve the understanding ability of the model.

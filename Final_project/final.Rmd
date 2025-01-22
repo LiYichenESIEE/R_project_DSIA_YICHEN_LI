@@ -1,0 +1,345 @@
+---
+title: "Bayesian classification and discriminant factor analysis"
+author: "YICHEN_LI"
+output:
+  html_document:
+    toc: true
+    toc_depth: 3
+    toc_float: true
+    theme: united
+    highlight: tango
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+# 1.Introduction
+
+In recent years, the application of AI-generated text has made significant progress, from natural language processing (NLP) models to large language models (such as GPT), which not only promotes the development of text generation technology, but also brings unprecedented convenience to content creation, education, and even daily communication. However, the rapid popularity of this technology has also raised concerns about its misuse, such as generating false information, plagiarism, or academic cheating. Therefore, how to accurately detect AI-generated text has become an important research direction and technical challenge. The solution of this problem is not only crucial for the maintenance of the authenticity of the content, but also provides a technical guarantee for the protection of academic and intellectual property rights.
+
+The goal of this project is to develop an efficient and accurate AI text detection model using Bayesian classification and discriminant factor analysis methods. Bayesian classification captures the latent features of texts through probabilistic inference models, while discriminant factor analysis further analyzes and distinguishes the key features of different categories of texts, thereby improving the accuracy of detection.
+
+# 2.Data & Preprocessing
+
+## 2.1 Data loading 
+```{r}
+options(warn = -1)
+
+suppressWarnings({
+    library(readxl)
+    library(dplyr)
+    library(tm)
+    library(text2vec)
+    library(brms)
+    library(ROCR)
+    library(ggplot2)
+    library(irlba)
+    library(caret)
+    library(klaR)
+    library(MASS)
+    library(MLmetrics)
+})       
+
+train_essays_path <- "/Users/lyly/R_project_DSIA_YICHEN_LI/final_datasets/llm-detect-ai-generated-text/train_essays.xlsx"
+test_essays_path <- "/Users/lyly/R_project_DSIA_YICHEN_LI/final_datasets/llm-detect-ai-generated-text/test_essays.xlsx"
+train_drcat_paths <- c("/Users/lyly/R_project_DSIA_YICHEN_LI/final_datasets/train_drcat_01/train_drcat_01.xlsx",
+                       "/Users/lyly/R_project_DSIA_YICHEN_LI/final_datasets/train_drcat_02/train_drcat_02.xlsx",
+                       "/Users/lyly/R_project_DSIA_YICHEN_LI/final_datasets/train_drcat_03/train_drcat_03.xlsx",
+                       "/Users/lyly/R_project_DSIA_YICHEN_LI/final_datasets/train_drcat_04/train_drcat_04.xlsx")
+
+save_path <- "/Users/lyly/R_project_DSIA_YICHEN_LI/final_datasets/results"
+```
+
+
+```{r}
+# Load the data and convert to data.frame format
+train_essays <- as.data.frame(read_excel(train_essays_path))  
+test_essays <- as.data.frame(read_excel(test_essays_path))   
+suppressWarnings(
+  train_drcat <- bind_rows(lapply(train_drcat_paths, function(path) {
+    as.data.frame(read_excel(path))  
+  }))
+)
+```
+
+## 2.3 Data cleansing
+
+Convert column names to lowercase and replace special characters with underscores, unify the column name format of the data frame, filter out the text and label columns related to the task, and convert the label column to numeric to ensure data consistency. Only data with values of 0 and 1 is retained, ensuring the binary nature of the classification task. Datasets are filtered, normalized, and combined into a unified training data frame. At the same time, by converting the merged label column to a factor type
+
+```{r}
+# Clean up column names: Convert all column names to lowercase and replace special characters
+colnames(train_essays) <- tolower(gsub("\\s+|\\n|\\t", "_", colnames(train_essays)))
+colnames(train_drcat) <- tolower(gsub("\\s+|\\n|\\t", "_", colnames(train_drcat)))
+colnames(test_essays) <- tolower(gsub("\\s+|\\n|\\t", "_", colnames(test_essays)))
+
+# Verify that the column names contain 'text' and 'label', and keep the necessary columns
+train_essays <- train_essays[, c("text", "label")]
+train_drcat <- train_drcat[, c("text", "label")]
+
+# Make sure the 'label' column is numeric
+train_essays$label <- as.numeric(train_essays$label)
+train_drcat$label <- as.numeric(train_drcat$label)
+
+test_essays <- test_essays[, c("text")]
+
+# Only data with values of 0 and 1 in the label column is retained
+train_essays <- train_essays %>%
+  filter(label %in% c(0, 1))
+
+train_drcat <- train_drcat %>%
+  filter(label %in% c(0, 1))
+
+# Merge training data
+combined_train <- bind_rows(train_essays, train_drcat)
+combined_train <- as.data.frame(combined_train)
+
+# Make sure the label column is the factor type
+combined_train <- combined_train %>%
+  mutate(label = as.factor(label))
+
+```
+
+## 2.4 EDA
+
+### 2.4.1 Basic Information
+
+```{r}
+# View the basic structure of the data frame
+str(combined_train)
+
+# View summary statistics for a dataset
+summary(combined_train)
+
+# Check if there are any missing values
+cat("The number of missing values:\n")
+print(colSums(is.na(combined_train)))
+
+# Check the distribution of the 'label' column
+cat("Label distribution:\n")
+table(combined_train$label)
+
+```
+There are a total of 160,727 records in the dataset, including the text and label columns. The text column is a character that records the specific text content, while the label column is a factor, divided into two categories: 0 and 1. The label distribution showed that there were 116,722 samples in class 0, accounting for 72.6% of the total samples, while there were 44,005 samples in class 1, accounting for 27.4%, and there was a certain imbalance. There are no missing values in the data, and the data quality is high.
+
+### 2.4.2 A map of the distribution of text lengths
+
+```{r}
+# Calculate the length (number of characters) of each piece of text
+combined_train$text_length <- nchar(combined_train$text)
+summary(combined_train$text_length)
+
+# Draw a map of the distribution of text lengths
+library(ggplot2)
+ggplot(combined_train, aes(x = text_length, fill = label)) +
+  geom_histogram(bins = 30, alpha = 0.7, position = "identity") +
+  labs(title = "Text length distribution", x = "Text length", y = "frequency") +
+  theme_minimal()
+
+```
+
+**Data distribution analysis**
+
+The distribution of text length is generally skewed to the right, with most text lengths concentrated between 500 and 4000, and the sample size gradually decreases as the text length increases, with very few text lengths exceeding 10000. The five-digit statistic shows a minimum length of 239, a median of 2036, and a maximum of 18318. The average length is 2225, indicating that there is some extremely long text that pulls up the mean.
+
+**Label comparison**
+
+Label 0 has a significantly larger sample size than label 1, and its text length is mainly distributed in the range of 1000 to 3000, which is more concentrated and more frequent. In contrast, label 1 has a wider distribution of text, especially in the longer text (>5000), suggesting that it may have some correlation with the text length.
+
+## 2.5 Text preprocessing
+
+Normalize test data test_essays to a data frame format and perform uniform cleansing operations on text in both the training and test sets, including lowercase, removal of punctuation and numbers, and removal of extra whitespace to ensure data consistency and reduce noise.
+
+```{r}
+if (is.vector(test_essays)) {
+  test_essays <- data.frame(text = test_essays, stringsAsFactors = FALSE)
+}
+
+# Text cleanup function
+clean_text <- function(text) {
+  text %>%
+    tolower() %>%
+    removePunctuation() %>%
+    removeNumbers() %>%
+    stripWhitespace()
+}
+
+combined_train$text <- sapply(combined_train$text, clean_text)
+test_essays$text <- sapply(test_essays$text, clean_text)
+
+```
+
+# 3.Feature extraction: TF-IDF
+
+Feature engineering text data. Reduce noise and extraneous features by limiting the size of the vocabulary and removing low-frequency words and words with a high document ratio. The vocabulary vectorizer is used to convert the cleaned text into a sparse document-word matrix (DTM), and the TF-IDF method is used to calculate the feature weights and retain the sparse format, so as to extract features that can better reflect the importance of the text.
+
+```{r}
+# Limit vocabulary size and discard low-frequency words
+vocab <- create_vocabulary(itoken(combined_train$text, progressbar = FALSE))
+pruned_vocab <- prune_vocabulary(vocab, term_count_min = 5, doc_proportion_max = 0.5)
+vectorizer <- vocab_vectorizer(pruned_vocab)
+
+# Create a Sparse Document - Word Matrix (DTM)
+train_dtm <- create_dtm(itoken(combined_train$text, progressbar = FALSE), vectorizer)
+
+# Calculate TF-IDF Feature Matrix (Keep Sparse Format)
+tfidf <- TfIdf$new()
+tfidf_matrix <- fit_transform(train_dtm, tfidf)
+
+```
+
+# 4.Discriminant factor analysis
+
+The truncated SVD method was used to reduce the dimensionality of the TF-IDF feature matrix, and the 100 most representative features were extracted. By truncating the left singular matrix (U matrix) of the SVD as the dimensionality reduction feature, the label information is retained to reduce memory usage. Ensure feature simplification without losing important information about the classification task.
+
+```{r}
+# Use Truncated SVD to reduce the dimensionality of sparse matrices
+set.seed(123)
+svd_result <- irlba(tfidf_matrix, nv = 100)  # nv is the number of features after dimensionality reduction, and 100 features are selected
+
+# The U-matrix of the SVD (the left singular matrix) is taken as the dimensionality reduction feature
+reduced_features <- as.data.frame(svd_result$u)
+
+reduced_features$label <- combined_train$label
+reduced_features$label <- as.factor(reduced_features$label)
+
+
+```
+
+In order to further extract the category discriminant features, linear discriminant analysis (LDA) was applied to the reduced data. Through the LDA method, the features are transformed into discriminative features that can maximize the differentiation of label categories while maintaining the consistency of label information
+
+```{r}
+
+# Perform discriminant factor analysis (LDA)
+lda_result <- lda(label ~ ., data = reduced_features, prior = c(0.5, 0.5))
+
+# Use LDA to transform features
+lda_transformed <- as.data.frame(predict(lda_result)$x)
+lda_transformed$label <- reduced_features$label
+
+lda_transformed$label <- factor(lda_transformed$label, levels = unique(lda_transformed$label), labels = make.names(levels(lda_transformed$label)))
+
+```
+
+# 5.Bayesian classification
+
+The model is evaluated with hierarchical k-fold cross-validation, and a 5-fold cross-validation is set to ensure the robustness of the training process. On the basis of dimensionality reduction and discriminant feature extraction, the naïve Bayesian classification model is used for training, and the final prediction results and category probabilities are saved.
+
+```{r}
+
+# Set the layered k-fold cross-validation parameters
+set.seed(123)
+train_control <- trainControl(
+  method = "cv",                 
+  number = 5,                    
+  savePredictions = "final",     
+  classProbs = TRUE,            
+  summaryFunction = multiClassSummary  
+)
+
+# Train the Naive Bayes model
+nb_model <- train(
+  label ~ .,                      
+  data = lda_transformed,         
+  method = "nb",                  
+  trControl = train_control       
+)
+
+print(nb_model)
+
+```
+In the process of training the naïve Bayes classifier, cross-validation was used to evaluate the performance of the model, and the results showed that the overall performance of the model was excellent. When kernel density estimation (usekernel = TRUE) is enabled, the accuracy of the model reaches 0.9791 and the AUC value is 0.9950, indicating that the model is very capable of distinguishing between positive and negative samples. At the same time, the precision and recall rates were 0.9818 and 0.9896, respectively, indicating that the model performed stably in detecting the target category. In addition, the logLoss value is reduced to 0.0642, proving that the model is more reliable in predicting categorical probabilities.
+
+In the process of parameter tuning, it was found that the model with kernel density estimation enabled performed better than the non-enabled model in various indicators, such as lower logLoss and higher prAUC (0.9940). At the same time, from the Kappa value (0.9471) and the balanced accuracy (0.9723), the model has strong adaptability to the imbalance of label categories. Eventually, the model using kernel density estimation was selected as the best model.
+
+# 6.Evaluation & Results
+
+```{r}
+# Extract cross-validation predictions
+predictions <- nb_model$pred
+
+# Extract probabilities for class "X1"
+prob_values <- predictions$X1
+
+# Convert `obs` to numeric (0 and 1)
+obs_numeric <- as.numeric(predictions$obs) - 1  # Convert factor to 0 and 1
+
+# Calculate ROC curve and AUC
+library(pROC)
+roc_curve <- roc(obs_numeric, prob_values)
+
+# Plot ROC curve
+plot(
+  roc_curve,
+  col = "blue",
+  main = paste("ROC Curve (AUC = ", round(auc(roc_curve), 2), ")", sep = "")
+)
+
+# Output AUC value
+cat("AUC value:", auc(roc_curve), "\n")
+
+# Confusion matrix: calculate accuracy, precision, recall, and F1 score
+conf_matrix <- confusionMatrix(predictions$pred, predictions$obs)
+print(conf_matrix)
+
+# Extract metrics
+accuracy <- conf_matrix$overall["Accuracy"]
+precision <- conf_matrix$byClass["Pos Pred Value"]
+recall <- conf_matrix$byClass["Sensitivity"]
+f1_score <- 2 * (precision * recall) / (precision + recall)
+
+cat("Accuracy:", accuracy, "\n")
+cat("Precision:", precision, "\n")
+cat("Recall:", recall, "\n")
+cat("F1 Score:", f1_score, "\n")
+
+```
+
+The AUC value of the ROC curve is 0.9950, which is close to 1, indicating that the model is very good at distinguishing between positive and negative samples. The confusion matrix showed that the accuracy of the model was 97.91%, and the Kappa value was 0.9471, which further verified the consistency and robustness of the model classification. In terms of specific indicators of classification, the precision of the model for the positive class (X0) is 98.18%, the recall rate is 98.96%, and the F1 score reaches 98.57%, which shows that the model has taken into account high accuracy and recall ability on the basis of high accuracy.
+
+Looking at the confusion matrix, 1214 samples labeled X0 were misclassified as X1, and 2146 samples labeled X1 were misclassified as X0. Although the number of misclassifications was relatively small, the specificity was 95.12%, which was slightly lower than the sensitivity (98.96%), indicating that the model was slightly weaker than the positive class (X0) when detecting negative (X1) samples. Overall, the Balanced Accuracy was 97.04%, indicating that the model could maintain classification performance well despite the category imbalance.
+
+## 6.1 Make predictions on the test set
+
+```{r}
+# Convert test set text to TF-IDF feature matrix
+test_tokens <- itoken(test_essays$text, progressbar = FALSE)
+test_dtm <- create_dtm(test_tokens, vectorizer = vocab_vectorizer(pruned_vocab))
+test_tfidf_matrix <- fit_transform(test_dtm, tfidf)
+
+# Convert sparse matrix to a standard matrix
+test_tfidf_dense <- as.matrix(test_tfidf_matrix)
+
+# Apply Truncated SVD for dimensionality reduction (consistent with the training set)
+test_svd_matrix <- as.data.frame(test_tfidf_dense %*% svd_result$v)
+
+# Set column names to match the reduced training set
+colnames(test_svd_matrix) <- paste0("V", 1:ncol(test_svd_matrix))
+
+# Transform features using Linear Discriminant Analysis (LDA) (consistent with the training set)
+test_lda_transformed <- as.data.frame(predict(lda_result, newdata = test_svd_matrix)$x)
+
+# Predict using the trained Naive Bayes model
+predicted_classes <- predict(nb_model, newdata = test_lda_transformed)
+predicted_probs <- predict(nb_model, newdata = test_lda_transformed, type = "prob")
+
+# Convert classes from "X1" -> 1 and "X0" -> 0
+predicted_classes <- ifelse(predicted_classes == "X1", 1, 0)
+
+# Extract probabilities for class 0 and class 1
+test_essays$predicted_class <- predicted_classes
+test_essays$predicted_prob_0 <- predicted_probs[, "X0"]  # Probability for class 0
+test_essays$predicted_prob_1 <- predicted_probs[, "X1"]  # Probability for class 1
+
+# Save final results
+write.csv(test_essays, file.path(save_path, "predict.csv"), row.names = FALSE)
+cat("Test set predictions have been saved to:", file.path(save_path, "predict.csv"), "\n")
+
+```
+# 7.Results
+
+Through systematic preprocessing, feature extraction, dimensionality reduction and classification modeling of text data, an artificial intelligence text detection system based on naïve Bayesian classifier was successfully constructed. By using Truncated SVD and Linear Discriminant Analysis (LDA) to reduce the dimensionality of high-dimensional sparse features and extract discriminative features, the efficiency and classification performance of the model are significantly improved. The model achieved an accuracy of 97.91% and an AUC value of 0.995 in the cross-validation, indicating that it is extremely capable of distinguishing between positive and negative class samples. On the test set, the classification results show that the model has efficient and stable prediction capabilities, and can accurately recognize human-generated text.
+
+# 8.Future work
+
+Although the model performance is excellent, there is still room for improvement. In future work, we can try to introduce more advanced feature extraction methods, such as pre-trained language models (such as embedded features of BERT or GPT), to further improve the feature expression ability of the model. In addition, due to the imbalance in the distribution of label categories, sample balancing techniques (such as upsampling or downsampling) can be combined to optimize the performance of the model against minority classes. Data processing needs to be optimized to accommodate larger-scale real-time data, combined with reinforcement learning or adaptive learning methods, so that the model can maintain efficient detection capabilities in the face of dynamically changing text generation techniques.
